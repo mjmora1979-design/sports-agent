@@ -1,0 +1,10 @@
+.git
+__pycache__/
+*.py[cod]
+*.so
+.venv
+.env
+dist/
+build/
+*.csv
+*.xlsx
