@@ -4,6 +4,13 @@ import sports_agent
 
 app = Flask(__name__)
 
+@app.route("/", methods=["GET"])
+def root():
+    return jsonify({
+        "ok": True,
+        "message": "Sports Agent API is live. Use POST /run for JSON or POST /excel for Excel outputs."
+    })
+
 @app.route("/run", methods=["POST"])
 def run():
     data = request.get_json() or {}
@@ -12,6 +19,8 @@ def run():
     survivor = data.get("survivor", False)
     used = data.get("used", [])
     double_from = int(data.get("double_from", 13))
+    game_filter = data.get("game_filter", None)
+    max_games = data.get("max_games", None)  # None = all games
 
     try:
         report, prev, surv = sports_agent.run_model(
@@ -20,21 +29,23 @@ def run():
             survivor=survivor,
             used=used,
             double_from=double_from,
+            game_filter=game_filter,
+            max_games=max_games
         )
         return jsonify({"status": "success", "report": report, "survivor": surv})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-
 @app.route("/excel", methods=["POST"])
 def excel():
-    """Return Excel file instead of JSON"""
     data = request.get_json() or {}
     mode = data.get("mode", "live")
     allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
     survivor = data.get("survivor", False)
     used = data.get("used", [])
     double_from = int(data.get("double_from", 13))
+    game_filter = data.get("game_filter", None)
+    max_games = data.get("max_games", None)
 
     try:
         report, prev, surv = sports_agent.run_model(
@@ -43,6 +54,8 @@ def excel():
             survivor=survivor,
             used=used,
             double_from=double_from,
+            game_filter=game_filter,
+            max_games=max_games
         )
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
         sports_agent.save_excel(report, prev, tmp.name, survivor=surv)
@@ -55,7 +68,6 @@ def excel():
         )
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
