@@ -5,4 +5,6 @@ pandas
 numpy
 openpyxl
 beautifulsoup4
-nfl_data_py
+nfl_data_py 
+
+add nfl_data_py dependency
