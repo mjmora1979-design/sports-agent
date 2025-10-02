@@ -5,3 +5,4 @@ pandas
 numpy
 openpyxl
 beautifulsoup4
+nfl_data_py
