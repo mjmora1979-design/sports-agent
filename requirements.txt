@@ -6,3 +6,6 @@ numpy==1.26.4
 openpyxl==3.1.5
 beautifulsoup4==4.12.3
 nfl_data_py==0.3.3
+
+# cache bust 2025-10-02b
+
