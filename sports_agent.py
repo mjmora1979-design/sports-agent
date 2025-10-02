@@ -10,13 +10,12 @@ NFL simulation agent with:
 - Excel export
 """
 
-import os, re, json, math, glob, argparse
+import os, json, glob, argparse
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
+from datetime import datetime
+from typing import Dict, List, Any
 
 import numpy as np, pandas as pd, requests
-from bs4 import BeautifulSoup
 
 # -------------------------------
 # Config
@@ -119,7 +118,7 @@ def save_excel(report, prev, fname, survivor=None):
 def run_model(mode="live", iterations=DEFAULT_ITERATIONS, allow_api=False, survivor=False, used=None, double_from=13):
     raw = get_odds(mode=mode, allow_api=allow_api)
 
-    # Simplified example deliverables
+    # Example deliverables (replace with your full model logic later)
     game_summaries = []
     player_props = []
     parlays = []
