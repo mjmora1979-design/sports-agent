@@ -1,18 +1,61 @@
-from flask import Flask, request, jsonify
-import os, sports_agent
+from flask import Flask, request, jsonify, send_file
+import os, tempfile
+import sports_agent
 
 app = Flask(__name__)
 
 @app.route("/run", methods=["POST"])
 def run():
     data = request.get_json() or {}
-    mode = data.get("mode","live")
-    allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API","")=="1"
-    try:
-        report, prev = sports_agent.run_model(mode=mode, allow_api=allow_api)
-        return jsonify({"status":"success","report":report})
-    except Exception as e:
-        return jsonify({"status":"error","message":str(e)}),500
+    mode = data.get("mode", "live")
+    allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
+    survivor = data.get("survivor", False)
+    used = data.get("used", [])
+    double_from = int(data.get("double_from", 13))
 
-if __name__=="__main__":
+    try:
+        report, prev, surv = sports_agent.run_model(
+            mode=mode,
+            allow_api=allow_api,
+            survivor=survivor,
+            used=used,
+            double_from=double_from,
+        )
+        return jsonify({"status": "success", "report": report, "survivor": surv})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/excel", methods=["POST"])
+def excel():
+    """Return Excel file instead of JSON"""
+    data = request.get_json() or {}
+    mode = data.get("mode", "live")
+    allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
+    survivor = data.get("survivor", False)
+    used = data.get("used", [])
+    double_from = int(data.get("double_from", 13))
+
+    try:
+        report, prev, surv = sports_agent.run_model(
+            mode=mode,
+            allow_api=allow_api,
+            survivor=survivor,
+            used=used,
+            double_from=double_from,
+        )
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+        sports_agent.save_excel(report, prev, tmp.name, survivor=surv)
+        tmp.flush()
+        return send_file(
+            tmp.name,
+            as_attachment=True,
+            download_name=f"report_{sports_agent.nowstamp()}.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
