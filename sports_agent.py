@@ -23,7 +23,7 @@ import numpy as np, pandas as pd, requests
 API_KEY = os.environ.get("ODDS_API_KEY", "PASTE_YOUR_API_KEY_HERE")
 BASE_URL = "https://api.the-odds-api.com/v4/sports"
 SPORT_ID = "americanfootball_nfl"
-MARKETS = "h2h,spreads,totals,player_pass_yds,player_rush_yds,player_rec_yds,player_pass_tds,player_anytime_td"
+MARKETS = "h2h,spreads,totals,player_pass_yds,player_rush_yds,player_receiving_yds,player_pass_tds,player_anytime_td"
 
 DEFAULT_ITERATIONS = 20000
 
