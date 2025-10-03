@@ -14,21 +14,16 @@ def root():
 @app.route("/run", methods=["POST"])
 def run():
     data = request.get_json() or {}
-
-    sport = data.get("sport", "nfl")
-    allow_api = data.get("allow_api", False) or (request.headers.get("X-ALLOW-API", "") == "1")
-    include_props = bool(data.get("include_props", False))
-    books = data.get("books")
-
-    disable_internal_picks = True
-    return_features = True
-
-    survivor = bool(data.get("survivor", False))
+    mode = data.get("mode", "live")
+    allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
+    survivor = data.get("survivor", False)
     used = data.get("used", [])
     double_from = int(data.get("double_from", 13))
-
-    game_filter = data.get("game_filter")
-    max_games = data.get("max_games")
+    game_filter = data.get("game_filter", None)
+    max_games = data.get("max_games", None)
+    sport = data.get("sport", "nfl")
+    include_props = data.get("include_props", False)
+    books = data.get("books", None)
 
     try:
         report, prev, surv = sports_agent.run_model(
@@ -36,8 +31,6 @@ def run():
             allow_api=allow_api,
             include_props=include_props,
             books=books,
-            disable_internal_picks=disable_internal_picks,
-            return_features=return_features,
             survivor=survivor,
             used=used,
             double_from=double_from,
@@ -51,21 +44,16 @@ def run():
 @app.route("/excel", methods=["POST"])
 def excel():
     data = request.get_json() or {}
-
-    sport = data.get("sport", "nfl")
-    allow_api = data.get("allow_api", False) or (request.headers.get("X-ALLOW-API", "") == "1")
-    include_props = bool(data.get("include_props", False))
-    books = data.get("books")
-
-    disable_internal_picks = True
-    return_features = True
-
-    survivor = bool(data.get("survivor", False))
+    mode = data.get("mode", "live")
+    allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
+    survivor = data.get("survivor", False)
     used = data.get("used", [])
     double_from = int(data.get("double_from", 13))
-
-    game_filter = data.get("game_filter")
-    max_games = data.get("max_games")
+    game_filter = data.get("game_filter", None)
+    max_games = data.get("max_games", None)
+    sport = data.get("sport", "nfl")
+    include_props = data.get("include_props", False)
+    books = data.get("books", None)
 
     try:
         report, prev, surv = sports_agent.run_model(
@@ -73,8 +61,6 @@ def excel():
             allow_api=allow_api,
             include_props=include_props,
             books=books,
-            disable_internal_picks=disable_internal_picks,
-            return_features=return_features,
             survivor=survivor,
             used=used,
             double_from=double_from,
