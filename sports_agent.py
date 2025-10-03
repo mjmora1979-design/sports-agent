@@ -1,30 +1,14 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-sports_agent.py
-Sports simulation agent:
-- Odds API global odds + player props
-- nfl_data_py historical stats (for NFL only)
-- Survivor helper
-- Excel export
-"""
+import os
+import requests
+import pandas as pd
+import numpy as np
+import datetime
+from openpyxl import Workbook
 
-import os, json, glob
-from datetime import datetime, timezone, timedelta
-from typing import List, Optional
-import pandas as pd, requests
-import nfl_data_py as nfl
+API_KEY = os.getenv("ODDS_API_KEY")
 
-# -------------------------------
-# Config
-# -------------------------------
-API_KEY = os.environ.get("ODDS_API_KEY", "PASTE_YOUR_API_KEY_HERE")
-BASE_URL = "https://api.the-odds-api.com/v4/sports"
-
-DEFAULT_ITERATIONS = 20000
-DEFAULT_MAX_GAMES = None   # None = all games
-
-SPORT_MAP = {
+# Map user-friendly sport codes to Odds API sport keys
+SPORT_KEYS = {
     "nfl": "americanfootball_nfl",
     "ncaaf": "americanfootball_ncaaf",
     "nba": "basketball_nba",
@@ -32,230 +16,111 @@ SPORT_MAP = {
     "ncaab": "basketball_ncaab"
 }
 
-WEEKLY_CACHE = "data/weekly_stats.csv"
+def nowstamp():
+    return datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 
-# -------------------------------
-# Helpers
-# -------------------------------
-def nowstamp() -> str:
-    return datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-
-def _is_api_allowed(flag: bool) -> bool:
-    return flag or os.environ.get("ALLOW_API_CALLS", "") == "1"
-
-def _parse_time(ts: str) -> datetime:
-    try:
-        if ts.endswith("Z"):
-            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        return datetime.fromisoformat(ts)
-    except Exception:
-        return datetime.utcnow().replace(tzinfo=timezone.utc)
-
-def american_to_prob(odds: float) -> Optional[float]:
-    if odds is None: return None
-    try: odds = float(odds)
-    except Exception: return None
-    if odds >= 100: return 100.0 / (odds + 100.0)
-    if odds <= -100: return -odds / (-odds + 100.0)
-    return None
-
-def devig_two_way(p1: float, p2: float) -> Optional[tuple]:
-    if p1 is None or p2 is None: return None
-    s = p1 + p2
-    if s <= 0: return None
-    return p1 / s, p2 / s
-
-# -------------------------------
-# Historical Data (NFL only)
-# -------------------------------
-def update_weekly_stats(years=[2024, 2025], outpath=WEEKLY_CACHE):
-    os.makedirs("data", exist_ok=True)
-    df = nfl.import_weekly_data(years)
-    df.to_csv(outpath, index=False)
-    return df
-
-def load_weekly_stats():
-    if os.path.exists(WEEKLY_CACHE):
-        mtime = datetime.fromtimestamp(os.path.getmtime(WEEKLY_CACHE))
-        if (datetime.utcnow() - mtime) > timedelta(days=7):
-            return update_weekly_stats()
-        return pd.read_csv(WEEKLY_CACHE)
-    else:
-        return update_weekly_stats()
-
-def project_from_history(player: str, market: str, df: pd.DataFrame):
-    try:
-        pstats = df[df["player_display_name"].str.lower() == player.lower()]
-        if pstats.empty: return None
-        if "pass_yds" in market: return pstats["passing_yards"].mean()
-        if "rush_yds" in market: return pstats["rushing_yards"].mean()
-        if "receiving_yds" in market: return pstats["receiving_yards"].mean()
-        if "pass_tds" in market: return pstats["passing_tds"].mean()
-        if "anytime_td" in market:
-            td_games = (pstats["rushing_tds"] + pstats["receiving_tds"]) > 0
-            return td_games.mean()
-    except Exception:
-        return None
-    return None
-
-def adjust_with_haircut(proj: float, injury_flag=False) -> float:
-    if proj is None: return None
-    factor = 0.8
-    if injury_flag: factor = 0.7
-    return proj * factor
-
-# -------------------------------
-# Odds API
-# -------------------------------
 def get_global_odds(allow_api: bool = False, sport: str = "nfl"):
-    sport_id = SPORT_MAP.get(sport.lower())
+    """
+    Fetch odds from the Odds API for the given sport.
+    NFL & NCAAF -> fetch the entire week of games
+    Others -> fetch day of game
+    """
+    if not allow_api:
+        raise ValueError("API access disabled. Set allow_api true or header X-ALLOW-API=1")
+
+    sport_id = SPORT_KEYS.get(sport.lower())
     if not sport_id:
-        raise RuntimeError(f"Unsupported sport: {sport}")
+        raise ValueError(f"Unsupported sport: {sport}")
 
-    if not _is_api_allowed(allow_api):
-        raise RuntimeError("API disabled")
-    if not API_KEY or API_KEY.startswith("PASTE_"):
-        raise RuntimeError("No API key set")
+    # Determine scheduling
+    today = datetime.datetime.utcnow()
+    if sport.lower() in ["nfl", "ncaaf"]:
+        # Full week window (Mon–Sun)
+        start_date = today - datetime.timedelta(days=today.weekday())  # Monday
+        end_date = start_date + datetime.timedelta(days=7)
+    else:
+        # Just today's games
+        start_date = today
+        end_date = today + datetime.timedelta(days=1)
 
-    # NFL/NCAAF => weekly slate, else daily games
-    days = 7 if sport.lower() in ["nfl", "ncaaf"] else 1
+    url = (
+        f"https://api.the-odds-api.com/v4/sports/{sport_id}/odds/"
+        f"?regions=us&markets=h2h,spreads,totals"
+        f"&dateFormat=iso&apiKey={API_KEY}"
+    )
 
-    url = f"{BASE_URL}/{sport_id}/odds"
-    params = {
-        "apiKey": API_KEY,
-        "regions": "us",
-        "markets": "h2h,spreads,totals",
-        "oddsFormat": "american",
-        "daysFrom": days
-    }
-    r = requests.get(url, params=params, timeout=30)
-    if r.status_code != 200:
-        raise RuntimeError(f"API error {r.status_code} {r.text}")
-    return r.json()
+    resp = requests.get(url)
+    if resp.status_code != 200:
+        raise ValueError(f"HTTP Error {resp.status_code}: {resp.reason}")
 
-def get_event_props(event_id: str, allow_api: bool = False):
-    if not _is_api_allowed(allow_api): return []
-    if not API_KEY or API_KEY.startswith("PASTE_"): return []
-    url = f"{BASE_URL}/americanfootball_nfl/events/{event_id}/odds"
-    params = {"apiKey": API_KEY, "regions": "us", "markets": "player_pass_yds,player_rush_yds,player_receiving_yds,player_pass_tds,player_anytime_td", "oddsFormat": "american"}
-    r = requests.get(url, params=params, timeout=30)
-    if r.status_code != 200: return []
-    return r.json()
+    games = resp.json()
 
-# -------------------------------
-# Survivor
-# -------------------------------
-def make_survivor_plan(team_probs: List[tuple], used: List[str], double_from: int):
-    used_set = set(u.lower() for u in (used or []))
-    available = [(t, p) for t, p in team_probs if t and t.lower() not in used_set]
-    ranked = sorted(available, key=lambda x: x[1], reverse=True)
-    return {
-        "recommendations": ranked[:3],
-        "current_week": "auto",
-        "picks_required": 2 if double_from <= 18 else 1,
-        "used": used or [],
-        "week": double_from
-    }
+    # Filter games within time window
+    results = []
+    for g in games:
+        try:
+            commence = datetime.datetime.fromisoformat(g["commence_time"].replace("Z", "+00:00"))
+            if not (start_date <= commence < end_date):
+                continue
 
-# -------------------------------
-# Excel Export
-# -------------------------------
-def save_excel(report, prev, fname, survivor=None):
-    with pd.ExcelWriter(fname, engine="openpyxl") as writer:
-        pd.DataFrame(report.get("game_summaries", [])).to_excel(writer, index=False, sheet_name="Games")
-        pd.DataFrame(report.get("player_props", [])).to_excel(writer, index=False, sheet_name="Props")
-        pd.DataFrame(report.get("parlay_suggestions", [])).to_excel(writer, index=False, sheet_name="Parlays")
-        pd.DataFrame(report.get("audit", [])).to_excel(writer, index=False, sheet_name="Audit")
-        if survivor:
-            pd.DataFrame(survivor.get("recommendations", []), columns=["Team", "WinProb"]).to_excel(writer, index=False, sheet_name="Survivor_Recs")
+            for book in g.get("bookmakers", []):
+                for market in book.get("markets", []):
+                    for outcome in market.get("outcomes", []):
+                        results.append({
+                            "home_team": g.get("home_team"),
+                            "away_team": g.get("away_team"),
+                            "commence_time": g.get("commence_time"),
+                            "book": book.get("title"),
+                            "market": market.get("key"),
+                            "name": outcome.get("name"),
+                            "price": outcome.get("price")
+                        })
+        except Exception as e:
+            print("Error parsing game:", e)
+            continue
 
-# -------------------------------
-# Main Model
-# -------------------------------
+    return pd.DataFrame(results)
+
+
 def run_model(
     mode="live",
-    iterations=DEFAULT_ITERATIONS,
     allow_api=False,
     survivor=False,
     used=None,
     double_from=13,
     game_filter=None,
-    max_games=DEFAULT_MAX_GAMES,
+    max_games=None,
     sport="nfl"
 ):
-    # Load stats only for NFL
-    df_stats = load_weekly_stats() if sport.lower() == "nfl" else None
+    """
+    Run the odds model wrapper.
+    """
+    if used is None:
+        used = []
 
-    raw = get_global_odds(allow_api=allow_api, sport=sport)
-    selected = raw  # all games fetched
+    # Pull odds data
+    df = get_global_odds(allow_api=allow_api, sport=sport)
 
-    game_summaries, player_props, team_probs = [], [], []
+    # Optional filtering
+    if game_filter:
+        df = df[df["home_team"].str.contains(game_filter, case=False) |
+                df["away_team"].str.contains(game_filter, case=False)]
 
-    for g in selected:
-        gid, home, away = g.get("id"), g.get("home_team"), g.get("away_team")
+    if max_games:
+        df = df.head(int(max_games))
 
-        # win prob
-        probs = []
-        for bm in g.get("bookmakers", []):
-            for mk in bm.get("markets", []):
-                if mk.get("key") == "h2h":
-                    pa = ph = None
-                    for o in mk.get("outcomes", []):
-                        if o["name"] == away: pa = american_to_prob(o["price"])
-                        if o["name"] == home: ph = american_to_prob(o["price"])
-                    dv = devig_two_way(pa, ph)
-                    if dv: probs.append(dv)
-        if probs:
-            away_p = sum(p[0] for p in probs) / len(probs)
-            home_p = sum(p[1] for p in probs) / len(probs)
-        else:
-            away_p, home_p = 0.5, 0.5
+    # Survivor stub
+    survivor_state = {"week": double_from, "used": used}
 
-        game_summaries.append({
-            "matchup": f"{away} at {home}",
-            "market_win_prob_home": round(home_p, 3),
-            "market_win_prob_away": round(away_p, 3)
-        })
-        team_probs.append((home, home_p))
-        team_probs.append((away, away_p))
+    return df.to_dict(orient="records"), None, survivor_state
 
-        # NFL props
-        if sport.lower() == "nfl":
-            ev = get_event_props(gid, allow_api=allow_api)
-            for ed in ev:
-                for bm in ed.get("bookmakers", []):
-                    for mk in bm.get("markets", []):
-                        for outcome in mk.get("outcomes", []):
-                            name, line, price = outcome.get("name"), outcome.get("line"), outcome.get("price")
-                            model_proj = project_from_history(name, mk.get("key"), df_stats)
-                            adj_proj = adjust_with_haircut(model_proj)
-                            edge, ev100 = None, None
-                            if line and adj_proj:
-                                try:
-                                    edge = round((adj_proj - float(line)) / float(line), 3)
-                                except:
-                                    pass
-                            if price and adj_proj:
-                                prob = american_to_prob(price)
-                                if prob:
-                                    ev100 = round((adj_proj - float(line or 0)) * prob, 2)
-                            player_props.append({
-                                "matchup": f"{away} at {home}",
-                                "player": name,
-                                "market": mk.get("key"),
-                                "market_line": line,
-                                "market_price": price,
-                                "model_proj": model_proj,
-                                "adj_proj": adj_proj,
-                                "edge": edge,
-                                "ev_$100": ev100
-                            })
 
-    report = {
-        "game_summaries": game_summaries,
-        "player_props": player_props,
-        "parlay_suggestions": [],
-        "audit": [{"timestamp_utc": datetime.utcnow().isoformat(), "selected_games": len(selected)}]
-    }
-    surv = make_survivor_plan(team_probs, used or [], double_from) if survivor else None
-    return report, None, surv
+def save_excel(report, prev, filepath, survivor=None):
+    """
+    Save report to Excel file.
+    """
+    df = pd.DataFrame(report)
+    with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Report")
+        if survivor:
+            pd.DataFrame([survivor]).to_excel(writer, index=False, sheet_name="Survivor")
