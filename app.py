@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, send_file
-import tempfile
+import os, tempfile
 import sports_agent
 
 app = Flask(__name__)
@@ -14,67 +14,82 @@ def root():
 @app.route("/run", methods=["POST"])
 def run():
     data = request.get_json() or {}
-    allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
-    survivor = data.get("survivor", False)
+
+    sport = data.get("sport", "nfl")
+    allow_api = data.get("allow_api", False) or (request.headers.get("X-ALLOW-API", "") == "1")
+    include_props = bool(data.get("include_props", False))
+    books = data.get("books")
+
+    disable_internal_picks = True
+    return_features = True
+
+    survivor = bool(data.get("survivor", False))
     used = data.get("used", [])
     double_from = int(data.get("double_from", 13))
-    game_filter = data.get("game_filter", None)
-    max_games = data.get("max_games", None)
-    sport = data.get("sport", "nfl")
-    books = data.get("books", None)
-    include_props = data.get("include_props", False)
+
+    game_filter = data.get("game_filter")
+    max_games = data.get("max_games")
 
     try:
         report, prev, surv = sports_agent.run_model(
-            mode=data.get("mode", "live"),
+            sport=sport,
             allow_api=allow_api,
+            include_props=include_props,
+            books=books,
+            disable_internal_picks=disable_internal_picks,
+            return_features=return_features,
             survivor=survivor,
             used=used,
             double_from=double_from,
             game_filter=game_filter,
-            max_games=max_games,
-            sport=sport,
-            books=books,
-            include_props=include_props
+            max_games=max_games
         )
         return jsonify({"status": "success", "report": report, "survivor": surv})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-
 @app.route("/excel", methods=["POST"])
 def excel():
     data = request.get_json() or {}
-    allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
-    survivor = data.get("survivor", False)
+
+    sport = data.get("sport", "nfl")
+    allow_api = data.get("allow_api", False) or (request.headers.get("X-ALLOW-API", "") == "1")
+    include_props = bool(data.get("include_props", False))
+    books = data.get("books")
+
+    disable_internal_picks = True
+    return_features = True
+
+    survivor = bool(data.get("survivor", False))
     used = data.get("used", [])
     double_from = int(data.get("double_from", 13))
-    game_filter = data.get("game_filter", None)
-    max_games = data.get("max_games", None)
-    sport = data.get("sport", "nfl")
-    books = data.get("books", None)
-    include_props = data.get("include_props", False)
+
+    game_filter = data.get("game_filter")
+    max_games = data.get("max_games")
 
     try:
         report, prev, surv = sports_agent.run_model(
-            mode=data.get("mode", "live"),
+            sport=sport,
             allow_api=allow_api,
+            include_props=include_props,
+            books=books,
+            disable_internal_picks=disable_internal_picks,
+            return_features=return_features,
             survivor=survivor,
             used=used,
             double_from=double_from,
             game_filter=game_filter,
-            max_games=max_games,
-            sport=sport,
-            books=books,
-            include_props=include_props
+            max_games=max_games
         )
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
         sports_agent.save_excel(report, prev, tmp.name, survivor=surv)
         tmp.flush()
-        return send_file(tmp.name,
-                         as_attachment=True,
-                         download_name=f"report_{sports_agent.nowstamp()}.xlsx",
-                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        return send_file(
+            tmp.name,
+            as_attachment=True,
+            download_name=f"report_{sports_agent.nowstamp()}.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
