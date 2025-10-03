@@ -1,7 +1,6 @@
 import os
 import requests
 import datetime
-from functools import lru_cache
 
 # -------------------------
 # Config
@@ -13,7 +12,6 @@ API_HOST = os.getenv("SPORTSBOOK_RAPIDAPI_HOST")
 BOOKS_DEFAULT = os.getenv("BOOKS_DEFAULT", "draftkings,fanduel").split(",")
 CACHE_TTL = int(os.getenv("CACHE_TTL_SEC", "7200"))  # 2 hours
 
-
 # -------------------------
 # Internal cache
 # -------------------------
@@ -21,9 +19,7 @@ CACHE_TTL = int(os.getenv("CACHE_TTL_SEC", "7200"))  # 2 hours
 def _make_cache_key(sport, start, end, books):
     return f"{sport}:{start}:{end}:{','.join(sorted(books))}"
 
-
 _cache = {}
-
 
 # -------------------------
 # API Calls
@@ -46,7 +42,8 @@ def get_odds_for_sport(sport, start, end, books=None):
         if now - ts < CACHE_TTL:
             return data
 
-    url = f"https://{API_HOST}/odds"
+    # ✅ Correct endpoint: /v1/odds
+    url = f"https://{API_HOST}/v1/odds"
     headers = {
         "X-RapidAPI-Key": API_KEY,
         "X-RapidAPI-Host": API_HOST
@@ -58,7 +55,7 @@ def get_odds_for_sport(sport, start, end, books=None):
         "oddsFormat": "american"
     }
 
-    # Debug logging (safe: we do not print your API key)
+    # Debug logging
     print(f"[DEBUG] Requesting odds from: {url}")
     print(f"[DEBUG] Params: {params}")
     print(f"[DEBUG] Headers (no key): {{'X-RapidAPI-Host': '{API_HOST}'}}")
