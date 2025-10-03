@@ -93,8 +93,6 @@ def run_model(
     allow_api=False,
     include_props=False,
     books=None,
-    disable_internal_picks=True,
-    return_features=True,
     survivor=False,
     used=None,
     double_from=13,
