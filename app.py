@@ -20,8 +20,8 @@ def run():
     used = data.get("used", [])
     double_from = int(data.get("double_from", 13))
     game_filter = data.get("game_filter", None)
-    max_games = data.get("max_games", None)
-    sport = data.get("sport", "nfl")  # ✅ NEW
+    max_games = data.get("max_games", None)  # None = all games
+    sport = data.get("sport", "nfl")  # <---- NEW PARAM
 
     try:
         report, prev, surv = sports_agent.run_model(
@@ -48,7 +48,7 @@ def excel():
     double_from = int(data.get("double_from", 13))
     game_filter = data.get("game_filter", None)
     max_games = data.get("max_games", None)
-    sport = data.get("sport", "nfl")  # ✅ NEW
+    sport = data.get("sport", "nfl")  # <---- NEW PARAM
 
     try:
         report, prev, surv = sports_agent.run_model(
