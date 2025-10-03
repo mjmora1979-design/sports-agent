@@ -1,7 +1,7 @@
 import os, datetime
 import pandas as pd
 import nfl_data_py as nfl
-from sportsbook_api import get_odds_for_sport
+from sportsbook_api import get_odds   # ✅ updated import
 from sheets_writer import log_to_sheets
 
 # -------------------------
@@ -72,7 +72,6 @@ def summarize_best_prices(game):
                 if prop_name not in summary["best_props"]:
                     summary["best_props"][prop_name] = {}
                 for player, lines in players.items():
-                    # lines expected: {"Over": {"point": xx, "price": yy}, "Under": {...}}
                     for side, line in lines.items():
                         current = summary["best_props"][prop_name].get(player, {}).get(side)
                         if not current or line.get("price", -9999) > current["price"]:
@@ -103,7 +102,7 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
     rows_for_sheets = []
 
     if allow_api:
-        odds = get_odds_for_sport(sport, start, end)
+        odds = get_odds(sport, start, end)   # ✅ corrected call
         for ev in odds:
             home = ev.get("home_team")
             away = ev.get("away_team")
@@ -119,7 +118,7 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
                     "h2h": data.get("h2h", {}),
                     "spreads": data.get("spreads", []),
                     "totals": data.get("totals", {}),
-                    "props": data.get("props", {})  # props now included
+                    "props": data.get("props", {})
                 }
 
             game = {
