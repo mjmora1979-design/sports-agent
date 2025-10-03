@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, send_file
-import os, tempfile
+import tempfile
 import sports_agent
 
 app = Flask(__name__)
@@ -14,7 +14,6 @@ def root():
 @app.route("/run", methods=["POST"])
 def run():
     data = request.get_json() or {}
-    mode = data.get("mode", "live")
     allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
     survivor = data.get("survivor", False)
     used = data.get("used", [])
@@ -23,10 +22,11 @@ def run():
     max_games = data.get("max_games", None)
     sport = data.get("sport", "nfl")
     books = data.get("books", None)
+    include_props = data.get("include_props", False)
 
     try:
         report, prev, surv = sports_agent.run_model(
-            mode=mode,
+            mode=data.get("mode", "live"),
             allow_api=allow_api,
             survivor=survivor,
             used=used,
@@ -34,16 +34,17 @@ def run():
             game_filter=game_filter,
             max_games=max_games,
             sport=sport,
-            books=books
+            books=books,
+            include_props=include_props
         )
         return jsonify({"status": "success", "report": report, "survivor": surv})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
 @app.route("/excel", methods=["POST"])
 def excel():
     data = request.get_json() or {}
-    mode = data.get("mode", "live")
     allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
     survivor = data.get("survivor", False)
     used = data.get("used", [])
@@ -52,10 +53,11 @@ def excel():
     max_games = data.get("max_games", None)
     sport = data.get("sport", "nfl")
     books = data.get("books", None)
+    include_props = data.get("include_props", False)
 
     try:
         report, prev, surv = sports_agent.run_model(
-            mode=mode,
+            mode=data.get("mode", "live"),
             allow_api=allow_api,
             survivor=survivor,
             used=used,
@@ -63,17 +65,16 @@ def excel():
             game_filter=game_filter,
             max_games=max_games,
             sport=sport,
-            books=books
+            books=books,
+            include_props=include_props
         )
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
         sports_agent.save_excel(report, prev, tmp.name, survivor=surv)
         tmp.flush()
-        return send_file(
-            tmp.name,
-            as_attachment=True,
-            download_name=f"report_{sports_agent.nowstamp()}.xlsx",
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        return send_file(tmp.name,
+                         as_attachment=True,
+                         download_name=f"report_{sports_agent.nowstamp()}.xlsx",
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
