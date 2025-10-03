@@ -1,5 +1,5 @@
 import os, requests, pandas as pd
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 API_KEY = os.getenv("ODDS_API_KEY", "")
 API_URL = "https://api.the-odds-api.com/v4/sports"
@@ -12,9 +12,17 @@ SPORT_MAP = {
     "ncaab": "basketball_ncaab"
 }
 
-# Markets
+# Core markets
 FEATURED_MARKETS = "h2h,spreads,totals"
-PROP_MARKETS = "player_pass_yds,player_rush_yds,player_receiving_yds,player_pass_tds,player_anytime_td"
+
+# Most common props (kept small for efficiency)
+COMMON_PROPS = [
+    "player_pass_yds",
+    "player_rush_yds",
+    "player_receiving_yds",
+    "player_pass_tds",
+    "player_anytime_td"
+]
 
 # Default sportsbooks
 DEFAULT_BOOKS = "draftkings,bet365,fanduel"
@@ -33,13 +41,7 @@ def fetch_odds(sport_key, markets, books, span="day"):
         "oddsFormat": "american",
         "bookmakers": books
     }
-
-    if span == "week":
-        # NFL/NCAAF → full week
-        params["dateFormat"] = "iso"
-    else:
-        # NBA/MLB/NCAAB → just today
-        params["dateFormat"] = "iso"
+    params["dateFormat"] = "iso"
 
     resp = requests.get(url, params=params)
     if resp.status_code != 200:
@@ -73,7 +75,7 @@ def parse_odds(data, market_key):
 def run_model(mode="live", allow_api=False, survivor=False,
               used=None, double_from=13, game_filter=None,
               max_games=None, sport="nfl", include_props=False,
-              books=DEFAULT_BOOKS):
+              books=DEFAULT_BOOKS, debug=False):
 
     used = used or []
     sport_id = SPORT_MAP.get(sport.lower())
@@ -83,26 +85,30 @@ def run_model(mode="live", allow_api=False, survivor=False,
     span = "week" if sport in ["nfl", "ncaaf"] else "day"
 
     report = []
-    if allow_api:
-        # Main odds (h2h, spreads, totals)
-        report.extend(parse_odds(fetch_odds(sport_id, FEATURED_MARKETS, books, span=span), "h2h"))
-        report.extend(parse_odds(fetch_odds(sport_id, FEATURED_MARKETS, books, span=span), "spreads"))
-        report.extend(parse_odds(fetch_odds(sport_id, FEATURED_MARKETS, books, span=span), "totals"))
+    skipped_props = []
 
-        # Props (safe fetch one by one)
+    if allow_api:
+        # Base markets
+        for key in ["h2h", "spreads", "totals"]:
+            report.extend(parse_odds(fetch_odds(sport_id, FEATURED_MARKETS, books, span=span), key))
+
+        # Props
         if include_props:
-            for market in PROP_MARKETS.split(","):
+            for market in COMMON_PROPS:
                 try:
-                    prop_json = fetch_odds(sport_id, market.strip(), books, span=span)
+                    prop_json = fetch_odds(sport_id, market, books, span=span)
                     if prop_json:
-                        report.extend(parse_odds(prop_json, market.strip()))
+                        report.extend(parse_odds(prop_json, market))
                 except Exception as e:
-                    print(f"Skipping prop market {market}: {e}")
+                    skipped_props.append(market)
 
     # Survivor metadata (simple placeholder)
     survivor_meta = {"week": double_from, "used": used}
 
-    return report, [], survivor_meta
+    if debug:
+        return report, [], survivor_meta, skipped_props
+    else:
+        return report, [], survivor_meta
 
 
 def save_excel(report, prev, path, survivor=None):
