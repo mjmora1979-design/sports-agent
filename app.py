@@ -20,8 +20,8 @@ def run():
     used = data.get("used", [])
     double_from = int(data.get("double_from", 13))
     game_filter = data.get("game_filter", None)
-    max_games = data.get("max_games", None)  # None = all games
-    sport = data.get("sport", "nfl")  # <---- NEW PARAM
+    max_games = data.get("max_games", None)
+    sport = data.get("sport", "nfl")  # defaults to NFL
 
     try:
         report, prev, surv = sports_agent.run_model(
@@ -34,9 +34,15 @@ def run():
             max_games=max_games,
             sport=sport
         )
-        return jsonify({"status": "success", "report": report, "survivor": surv})
+        return jsonify({
+            "status": "success",
+            "sport": sport,
+            "report": report,
+            "survivor": surv
+        })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 @app.route("/excel", methods=["POST"])
 def excel():
@@ -48,7 +54,7 @@ def excel():
     double_from = int(data.get("double_from", 13))
     game_filter = data.get("game_filter", None)
     max_games = data.get("max_games", None)
-    sport = data.get("sport", "nfl")  # <---- NEW PARAM
+    sport = data.get("sport", "nfl")  # defaults to NFL
 
     try:
         report, prev, surv = sports_agent.run_model(
@@ -72,6 +78,7 @@ def excel():
         )
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
