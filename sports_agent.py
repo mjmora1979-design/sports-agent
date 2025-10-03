@@ -3,13 +3,14 @@
 """
 sports_agent.py
 Multi-sport simulation agent:
-- Odds API global odds + props
-- nfl_data_py historical stats (for NFL)
+- Odds API global odds + player props
+- nfl_data_py historical stats (NFL/NCAAF)
 - Survivor helper
 - Excel export
 """
 
-import os, json, glob, requests, datetime
+import os, json, glob, requests
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 import pandas as pd
 import nfl_data_py as nfl
@@ -20,13 +21,7 @@ import nfl_data_py as nfl
 API_KEY = os.environ.get("ODDS_API_KEY", "PASTE_YOUR_API_KEY_HERE")
 BASE_URL = "https://api.the-odds-api.com/v4/sports"
 
-FEATURED_MARKETS = "h2h,spreads,totals"
-PROP_MARKETS = "player_pass_yds,player_rush_yds,player_receiving_yds,player_pass_tds,player_anytime_td"
-
-DEFAULT_ITERATIONS = 20000
-DEFAULT_MAX_GAMES = None   # None = all games
-
-SPORT_IDS = {
+SPORT_MAP = {
     "nfl": "americanfootball_nfl",
     "ncaaf": "americanfootball_ncaaf",
     "nba": "basketball_nba",
@@ -34,24 +29,27 @@ SPORT_IDS = {
     "ncaab": "basketball_ncaab"
 }
 
+FEATURED_MARKETS = "h2h,spreads,totals"
+PROP_MARKETS = "player_pass_yds,player_rush_yds,player_receiving_yds,player_pass_tds,player_anytime_td"
+
 WEEKLY_CACHE = "data/weekly_stats.csv"
 
 # -------------------------------
 # Helpers
 # -------------------------------
 def nowstamp() -> str:
-    return datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    return datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 
 def _is_api_allowed(flag: bool) -> bool:
     return flag or os.environ.get("ALLOW_API_CALLS", "") == "1"
 
-def _parse_time(ts: str) -> datetime.datetime:
+def _parse_time(ts: str) -> datetime:
     try:
         if ts.endswith("Z"):
-            return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        return datetime.datetime.fromisoformat(ts)
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return datetime.fromisoformat(ts)
     except Exception:
-        return datetime.datetime.utcnow()
+        return datetime.utcnow().replace(tzinfo=timezone.utc)
 
 def american_to_prob(odds: float) -> Optional[float]:
     if odds is None: return None
@@ -68,7 +66,7 @@ def devig_two_way(p1: float, p2: float) -> Optional[tuple]:
     return p1 / s, p2 / s
 
 # -------------------------------
-# Historical Data (nfl_data_py)
+# Historical Data (NFL/NCAAF)
 # -------------------------------
 def update_weekly_stats(years=[2024, 2025], outpath=WEEKLY_CACHE):
     os.makedirs("data", exist_ok=True)
@@ -78,8 +76,8 @@ def update_weekly_stats(years=[2024, 2025], outpath=WEEKLY_CACHE):
 
 def load_weekly_stats():
     if os.path.exists(WEEKLY_CACHE):
-        mtime = datetime.datetime.fromtimestamp(os.path.getmtime(WEEKLY_CACHE))
-        if (datetime.datetime.utcnow() - mtime) > datetime.timedelta(days=7):
+        mtime = datetime.fromtimestamp(os.path.getmtime(WEEKLY_CACHE))
+        if (datetime.utcnow() - mtime) > timedelta(days=7):
             return update_weekly_stats()
         return pd.read_csv(WEEKLY_CACHE)
     else:
@@ -88,7 +86,8 @@ def load_weekly_stats():
 # -------------------------------
 # Odds API
 # -------------------------------
-def get_global_odds(allow_api: bool = False, sport_id: str = SPORT_IDS["nfl"]):
+def get_global_odds(sport: str, allow_api: bool = False):
+    sport_id = SPORT_MAP.get(sport, "americanfootball_nfl")
     if not _is_api_allowed(allow_api):
         raise RuntimeError("API disabled")
     if not API_KEY or API_KEY.startswith("PASTE_"):
@@ -102,68 +101,63 @@ def get_global_odds(allow_api: bool = False, sport_id: str = SPORT_IDS["nfl"]):
     return r.json()
 
 # -------------------------------
+# Game Filtering
+# -------------------------------
+def filter_games_by_sport(raw, sport):
+    now = datetime.utcnow().replace(tzinfo=timezone.utc)
+    if sport in ["nfl", "ncaaf"]:
+        # Next 7 days of games
+        cutoff = now + timedelta(days=7)
+        return [g for g in raw if _parse_time(g.get("commence_time")) <= cutoff]
+    else:
+        # Only today’s games
+        today = now.date()
+        return [g for g in raw if _parse_time(g.get("commence_time")).date() == today]
+
+# -------------------------------
 # Survivor
 # -------------------------------
 def make_survivor_plan(team_probs: List[tuple], used: List[str], double_from: int):
     used_set = set(u.lower() for u in (used or []))
     available = [(t, p) for t, p in team_probs if t and t.lower() not in used_set]
     ranked = sorted(available, key=lambda x: x[1], reverse=True)
-    return {"recommendations": ranked[:3], "used": used, "week": double_from}
+    return {"recommendations": ranked[:3], "week": double_from, "used": used or []}
 
 # -------------------------------
 # Excel Export
 # -------------------------------
 def save_excel(report, prev, fname, survivor=None):
     with pd.ExcelWriter(fname, engine="openpyxl") as writer:
-        pd.DataFrame(report).to_excel(writer, index=False, sheet_name="Report")
+        pd.DataFrame(report).to_excel(writer, index=False, sheet_name="Games")
         if survivor:
-            pd.DataFrame(survivor.get("recommendations", []), columns=["Team", "WinProb"]).to_excel(
-                writer, index=False, sheet_name="Survivor_Recs"
-            )
+            pd.DataFrame(survivor.get("recommendations", []), columns=["Team", "WinProb"]).to_excel(writer, index=False, sheet_name="Survivor")
 
 # -------------------------------
 # Main
 # -------------------------------
-def run_model(mode="live", iterations=DEFAULT_ITERATIONS, allow_api=False,
-              survivor=False, used=None, double_from=13,
-              game_filter=None, max_games=DEFAULT_MAX_GAMES, sport="nfl"):
+def run_model(mode="live", allow_api=False, survivor=False, used=None, double_from=13, game_filter=None, max_games=None, sport="nfl"):
+    raw = get_global_odds(sport, allow_api=allow_api)
+    selected = filter_games_by_sport(raw, sport)
 
-    sport_id = SPORT_IDS.get(sport.lower(), SPORT_IDS["nfl"])
-    raw = get_global_odds(allow_api=allow_api, sport_id=sport_id)
+    report, team_probs = [], []
 
-    today = datetime.datetime.utcnow()
+    for g in selected:
+        gid, home, away = g.get("id"), g.get("home_team"), g.get("away_team")
+        commence = g.get("commence_time")
 
-    # Expand date windows
-    if sport.lower() in ["nfl", "ncaaf"]:
-        start_date = today - datetime.timedelta(days=2)
-        end_date = today + datetime.timedelta(days=14)
-    else:
-        start_date = today - datetime.timedelta(hours=12)
-        end_date = today + datetime.timedelta(days=1)
-
-    # Filter games by window
-    selected = []
-    for g in raw:
-        gtime = _parse_time(g.get("commence_time"))
-        if start_date <= gtime <= end_date:
-            if game_filter:
-                combined = (g.get("home_team", "") + g.get("away_team", "")).lower()
-                if game_filter.lower() not in combined:
-                    continue
-            selected.append({
-                "home_team": g.get("home_team"),
-                "away_team": g.get("away_team"),
-                "commence_time": g.get("commence_time"),
-                "book": g["bookmakers"][0]["title"] if g.get("bookmakers") else None,
-                "market": g["bookmakers"][0]["markets"][0]["key"] if g.get("bookmakers") else None,
-                "name": g["bookmakers"][0]["markets"][0]["outcomes"][0]["name"] if g.get("bookmakers") else None,
-                "price": g["bookmakers"][0]["markets"][0]["outcomes"][0]["price"] if g.get("bookmakers") else None,
-            })
-
-    # Survivor prep (only NFL/NCAAF where win probs matter)
-    team_probs = []
-    for g in raw:
-        home, away = g.get("home_team"), g.get("away_team")
+        for bm in g.get("bookmakers", []):
+            for mk in bm.get("markets", []):
+                for o in mk.get("outcomes", []):
+                    report.append({
+                        "home_team": home,
+                        "away_team": away,
+                        "commence_time": commence,
+                        "book": bm.get("title"),
+                        "market": mk.get("key"),
+                        "name": o.get("name"),
+                        "price": o.get("price")
+                    })
+        # quick win prob estimate
         probs = []
         for bm in g.get("bookmakers", []):
             for mk in bm.get("markets", []):
@@ -175,11 +169,9 @@ def run_model(mode="live", iterations=DEFAULT_ITERATIONS, allow_api=False,
                     dv = devig_two_way(pa, ph)
                     if dv: probs.append(dv)
         if probs:
-            away_p = sum(p[0] for p in probs) / len(probs)
-            home_p = sum(p[1] for p in probs) / len(probs)
-            team_probs.append((home, home_p))
-            team_probs.append((away, away_p))
+            away_p = sum(p[0] for p in probs)/len(probs)
+            home_p = sum(p[1] for p in probs)/len(probs)
+            team_probs.append((home, home_p)); team_probs.append((away, away_p))
 
-    surv = make_survivor_plan(team_probs, used or [], double_from) if survivor else {"used": used or [], "week": double_from}
-
-    return {"report": selected, "status": "success"}, None, surv
+    surv = make_survivor_plan(team_probs, used or [], double_from) if survivor else None
+    return report, None, surv
