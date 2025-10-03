@@ -14,16 +14,14 @@ def root():
 @app.route("/run", methods=["POST"])
 def run():
     data = request.get_json() or {}
-
-    # Parameters with safe defaults
     mode = data.get("mode", "live")
     allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
     survivor = data.get("survivor", False)
     used = data.get("used", [])
     double_from = int(data.get("double_from", 13))
     game_filter = data.get("game_filter", None)
-    max_games = data.get("max_games", None)
-    sport = data.get("sport", "nfl")  # <- NEW: supports nfl, ncaaf, nba, mlb, ncaab
+    max_games = data.get("max_games", None)  # None = all games
+    sport = data.get("sport", "nfl")  # new param
 
     try:
         report, prev, surv = sports_agent.run_model(
@@ -43,8 +41,6 @@ def run():
 @app.route("/excel", methods=["POST"])
 def excel():
     data = request.get_json() or {}
-
-    # Parameters with safe defaults
     mode = data.get("mode", "live")
     allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
     survivor = data.get("survivor", False)
@@ -52,7 +48,7 @@ def excel():
     double_from = int(data.get("double_from", 13))
     game_filter = data.get("game_filter", None)
     max_games = data.get("max_games", None)
-    sport = data.get("sport", "nfl")
+    sport = data.get("sport", "nfl")  # new param
 
     try:
         report, prev, surv = sports_agent.run_model(
@@ -65,11 +61,9 @@ def excel():
             max_games=max_games,
             sport=sport
         )
-
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
         sports_agent.save_excel(report, prev, tmp.name, survivor=surv)
         tmp.flush()
-
         return send_file(
             tmp.name,
             as_attachment=True,
@@ -80,5 +74,4 @@ def excel():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == "__main__":
-    # Local dev only
     app.run(host="0.0.0.0", port=5000)
