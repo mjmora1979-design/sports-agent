@@ -20,8 +20,8 @@ def run():
     used = data.get("used", [])
     double_from = int(data.get("double_from", 13))
     game_filter = data.get("game_filter", None)
-    max_games = data.get("max_games", None)  # None = all games
-    sport = data.get("sport", "nfl")  # new param
+    max_games = data.get("max_games", None)
+    sport = data.get("sport", "nfl")  # supports nfl, ncaaf, nba, mlb, ncaab
 
     try:
         report, prev, surv = sports_agent.run_model(
@@ -34,7 +34,7 @@ def run():
             max_games=max_games,
             sport=sport
         )
-        return jsonify({"status": "success", "report": report, "survivor": surv})
+        return jsonify({"status": "success", "report": report["report"], "survivor": surv})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -48,7 +48,7 @@ def excel():
     double_from = int(data.get("double_from", 13))
     game_filter = data.get("game_filter", None)
     max_games = data.get("max_games", None)
-    sport = data.get("sport", "nfl")  # new param
+    sport = data.get("sport", "nfl")
 
     try:
         report, prev, surv = sports_agent.run_model(
@@ -62,7 +62,7 @@ def excel():
             sport=sport
         )
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
-        sports_agent.save_excel(report, prev, tmp.name, survivor=surv)
+        sports_agent.save_excel(report["report"], prev, tmp.name, survivor=surv)
         tmp.flush()
         return send_file(
             tmp.name,
