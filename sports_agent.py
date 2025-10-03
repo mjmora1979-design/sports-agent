@@ -1,121 +1,77 @@
-import os
-import requests
-import pandas as pd
-from datetime import datetime
-from openpyxl import Workbook
+from flask import Flask, request, jsonify, send_file
+import os, tempfile
+import sports_agent
 
-# =========================
-# Sport Key Mapping
-# =========================
-SPORT_KEY_MAP = {
-    "nfl": "americanfootball_nfl",
-    "football": "americanfootball_nfl",
-    "nba": "basketball_nba",
-    "basketball": "basketball_nba",
-    "mlb": "baseball_mlb",
-    "baseball": "baseball_mlb",
-    "nhl": "icehockey_nhl",
-    "hockey": "icehockey_nhl",
-}
+app = Flask(__name__)
 
-def get_sport_key(user_input: str) -> str:
-    """Translate user-friendly sport names into API keys."""
-    if not user_input:
-        return "americanfootball_nfl"  # Default NFL
-    key = user_input.lower().strip()
-    if key in SPORT_KEY_MAP:
-        return SPORT_KEY_MAP[key]
-    raise ValueError(f"Unsupported sport '{user_input}'. Supported: {list(SPORT_KEY_MAP.keys())}")
+@app.route("/", methods=["GET"])
+def root():
+    return jsonify({
+        "ok": True,
+        "message": "Sports Agent API is live. Use POST /run for JSON or POST /excel for Excel outputs."
+    })
 
-
-# =========================
-# API Call
-# =========================
-def get_global_odds(allow_api: bool = False, sport: str = "nfl"):
-    """Fetch odds from The Odds API or fallback mock if allow_api is False."""
-    sport_key = get_sport_key(sport)
-
-    if not allow_api:
-        # Return mock data if API not allowed
-        return pd.DataFrame([
-            {"home_team": "Mock Home", "away_team": "Mock Away",
-             "commence_time": "2025-01-01T00:00:00Z", "book": "mock",
-             "market": "h2h", "name": "Mock Team", "price": -110}
-        ])
-
-    api_key = os.getenv("ODDS_API_KEY")
-    if not api_key:
-        raise RuntimeError("Missing ODDS_API_KEY environment variable.")
-
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
-    params = {
-        "apiKey": api_key,
-        "regions": "us",
-        "markets": "h2h,spreads,totals",
-        "oddsFormat": "american"
-    }
-
-    resp = requests.get(url, params=params)
-    if resp.status_code != 200:
-        raise RuntimeError(f"HTTP Error {resp.status_code}: {resp.text}")
-
-    games = resp.json()
-    rows = []
-    for g in games:
-        for book in g.get("bookmakers", []):
-            for market in book.get("markets", []):
-                for outcome in market.get("outcomes", []):
-                    rows.append({
-                        "home_team": g.get("home_team"),
-                        "away_team": g.get("away_team"),
-                        "commence_time": g.get("commence_time"),
-                        "market": market.get("key"),
-                        "book": book.get("title"),
-                        "name": outcome.get("name"),
-                        "price": outcome.get("price")
-                    })
-    return pd.DataFrame(rows)
-
-
-# =========================
-# Core Runner
-# =========================
-def run_model(mode="live", allow_api=False, survivor=False, used=None,
-              double_from=13, game_filter=None, max_games=None, sport="nfl"):
+@app.route("/run", methods=["POST"])
+def run():
+    data = request.get_json() or {}
+    mode = data.get("mode", "live")
+    allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
+    survivor = data.get("survivor", False)
+    used = data.get("used", [])
+    double_from = int(data.get("double_from", 13))
+    game_filter = data.get("game_filter", None)
+    max_games = data.get("max_games", None)
+    sport = data.get("sport", "nfl")
 
     try:
-        df = get_global_odds(allow_api=allow_api, sport=sport)
-    except ValueError:
-        # fallback if sport is not supported
-        df = get_global_odds(allow_api=allow_api, sport="nfl")
+        report, prev, surv = sports_agent.run_model(
+            mode=mode,
+            allow_api=allow_api,
+            survivor=survivor,
+            used=used,
+            double_from=double_from,
+            game_filter=game_filter,
+            max_games=max_games,
+            sport=sport
+        )
+        return jsonify({"status": "success", "report": report, "survivor": surv})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-    # Optionally filter by team name
-    if game_filter:
-        df = df[df["home_team"].str.contains(game_filter, case=False) |
-                df["away_team"].str.contains(game_filter, case=False)]
+@app.route("/excel", methods=["POST"])
+def excel():
+    data = request.get_json() or {}
+    mode = data.get("mode", "live")
+    allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
+    survivor = data.get("survivor", False)
+    used = data.get("used", [])
+    double_from = int(data.get("double_from", 13))
+    game_filter = data.get("game_filter", None)
+    max_games = data.get("max_games", None)
+    sport = data.get("sport", "nfl")
 
-    if max_games:
-        df = df.head(max_games)
+    try:
+        report, prev, surv = sports_agent.run_model(
+            mode=mode,
+            allow_api=allow_api,
+            survivor=survivor,
+            used=used,
+            double_from=double_from,
+            game_filter=game_filter,
+            max_games=max_games,
+            sport=sport
+        )
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+        sports_agent.save_excel(report, prev, tmp.name, survivor=surv)
+        tmp.flush()
+        return send_file(
+            tmp.name,
+            as_attachment=True,
+            download_name=f"report_{sports_agent.nowstamp()}.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-    # Survivor placeholder
-    survivor_output = {"week": double_from, "used": used or []}
-
-    return df.to_dict(orient="records"), [], survivor_output
-
-
-# =========================
-# Excel Export
-# =========================
-def save_excel(report, prev, filepath, survivor=None):
-    df = pd.DataFrame(report)
-    with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
-        df.to_excel(writer, sheet_name="Report", index=False)
-        if survivor:
-            pd.DataFrame([survivor]).to_excel(writer, sheet_name="Survivor", index=False)
-
-
-# =========================
-# Timestamp Helper
-# =========================
-def nowstamp():
-    return datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
