@@ -23,19 +23,20 @@ def run():
     max_games = data.get("max_games", None)
     sport = data.get("sport", "nfl")
     include_props = data.get("include_props", False)
-    books = data.get("books", None)
+    books = data.get("books", sports_agent.DEFAULT_BOOKS)
 
     try:
         report, prev, surv = sports_agent.run_model(
-            sport=sport,
+            mode=mode,
             allow_api=allow_api,
-            include_props=include_props,
-            books=books,
             survivor=survivor,
             used=used,
             double_from=double_from,
             game_filter=game_filter,
-            max_games=max_games
+            max_games=max_games,
+            sport=sport,
+            include_props=include_props,
+            books=books
         )
         return jsonify({"status": "success", "report": report, "survivor": surv})
     except Exception as e:
@@ -53,19 +54,20 @@ def excel():
     max_games = data.get("max_games", None)
     sport = data.get("sport", "nfl")
     include_props = data.get("include_props", False)
-    books = data.get("books", None)
+    books = data.get("books", sports_agent.DEFAULT_BOOKS)
 
     try:
         report, prev, surv = sports_agent.run_model(
-            sport=sport,
+            mode=mode,
             allow_api=allow_api,
-            include_props=include_props,
-            books=books,
             survivor=survivor,
             used=used,
             double_from=double_from,
             game_filter=game_filter,
-            max_games=max_games
+            max_games=max_games,
+            sport=sport,
+            include_props=include_props,
+            books=books
         )
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
         sports_agent.save_excel(report, prev, tmp.name, survivor=surv)
