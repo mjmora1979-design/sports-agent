@@ -2,149 +2,158 @@ import os
 import requests
 import pandas as pd
 import datetime as dt
-import json
-import gspread
-from google.oauth2.service_account import Credentials
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
-# === ENVIRONMENT VARS ===
-SPORTSBOOK_KEY = os.getenv("SPORTSBOOK_API_KEY")
-GOOGLE_CREDS = os.getenv("GOOGLE_CREDENTIALS")
+# ============ CONFIG ============
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")  # Your RapidAPI key for sportsbookapi
+SPORTSBOOK_HOST = "sportsbook-api2.p.rapidapi.com"
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")  # Your Google Sheet ID
+SERVICE_ACCOUNT_FILE = "service_account.json"  # Uploaded to Render
 
-# === GOOGLE SHEETS SETUP ===
-if GOOGLE_CREDS:
-    creds_dict = json.loads(GOOGLE_CREDS)
-    creds = Credentials.from_service_account_info(
-        creds_dict,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+# Default books to keep (can be swapped)
+DEFAULT_BOOKS = ["DraftKings", "FanDuel", "Bet365"]
+
+# Cache memory
+_odds_cache = {"timestamp": None, "data": None}
+
+
+# ============ HELPERS ============
+def get_sheets_service():
+    creds = service_account.Credentials.from_service_account_file(
+        SERVICE_ACCOUNT_FILE, scopes=SCOPES
     )
-    gs_client = gspread.authorize(creds)
-    SHEET_ID = os.getenv("GOOGLE_SHEET_ID")  # you must set this in Render
-    sheet = gs_client.open_by_key(SHEET_ID).sheet1
-else:
-    gs_client, sheet = None, None
-
-# === SUPPORTED SPORTS MAP ===
-SPORT_MAP = {
-    "nfl": "americanfootball_nfl",
-    "ncaaf": "americanfootball_ncaaf",
-    "nba": "basketball_nba",
-    "mlb": "baseball_mlb"
-}
-
-# === API BASE ===
-API_BASE = "https://sportsbook-api2.p.rapidapi.com"
-
-HEADERS = {
-    "X-RapidAPI-Key": SPORTSBOOK_KEY,
-    "X-RapidAPI-Host": "sportsbook-api2.p.rapidapi.com"
-}
+    return build("sheets", "v4", credentials=creds)
 
 
-def fetch_odds(sport="nfl"):
-    """Fetch odds for a given sport from Sportsbook API"""
-    sport_key = SPORT_MAP.get(sport.lower())
-    if not sport_key:
-        raise ValueError(f"Unsupported sport: {sport}")
+def ensure_headers():
+    """Make sure headers exist in Google Sheet."""
+    service = get_sheets_service()
+    sheet = service.spreadsheets()
+    result = sheet.values().get(
+        spreadsheetId=GOOGLE_SHEET_ID, range="Sheet1!A1:H1"
+    ).execute()
 
-    url = f"{API_BASE}/odds"
-    params = {"sport": sport_key}
+    values = result.get("values", [])
+    if not values:  # Sheet is empty, write headers
+        headers = [["Date", "Home Team", "Away Team", "Market", "Name", "Price", "Book", "Snapshot"]]
+        sheet.values().update(
+            spreadsheetId=GOOGLE_SHEET_ID,
+            range="Sheet1!A1",
+            valueInputOption="RAW",
+            body={"values": headers}
+        ).execute()
 
-    resp = requests.get(url, headers=HEADERS, params=params)
-    resp.raise_for_status()
-    return resp.json()
+
+def append_to_sheet(rows):
+    """Append odds rows to Google Sheet."""
+    ensure_headers()
+    service = get_sheets_service()
+    sheet = service.spreadsheets()
+
+    sheet.values().append(
+        spreadsheetId=GOOGLE_SHEET_ID,
+        range="Sheet1!A:H",
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body={"values": rows}
+    ).execute()
 
 
-def parse_report(data, log_full=False):
-    """Extract either full odds or just opening/closing per game"""
-    report = []
-    for event in data.get("events", []):
-        home = event.get("home_team")
-        away = event.get("away_team")
-        commence = event.get("commence_time")
-        markets = event.get("markets", [])
+def fetch_odds_from_api(sport="nfl"):
+    url = f"https://{SPORTSBOOK_HOST}/odds/{sport}"
+    headers = {
+        "X-RapidAPI-Key": RAPIDAPI_KEY,
+        "X-RapidAPI-Host": SPORTSBOOK_HOST,
+    }
+    response = requests.get(url, headers=headers, timeout=30)
+    response.raise_for_status()
+    return response.json()
 
-        if log_full:
-            # dump all
-            for m in markets:
-                for outcome in m.get("outcomes", []):
-                    report.append({
-                        "home_team": home,
-                        "away_team": away,
-                        "commence_time": commence,
-                        "market": m.get("key"),
-                        "name": outcome.get("name"),
-                        "price": outcome.get("price"),
-                        "book": m.get("book")
-                    })
+
+# ============ MAIN MODEL ============
+def run_model(
+    mode="live",
+    allow_api=True,
+    survivor=False,
+    used=None,
+    double_from=13,
+    game_filter=None,
+    max_games=None,
+    sport="nfl",
+    include_props=False,
+    allowed_books=None
+):
+    global _odds_cache
+    now = dt.datetime.utcnow()
+
+    # Caching: only fetch every 2 hours
+    if (
+        _odds_cache["timestamp"] is None
+        or (now - _odds_cache["timestamp"]).total_seconds() > 7200
+    ):
+        if allow_api:
+            raw_data = fetch_odds_from_api(sport)
+            _odds_cache = {"timestamp": now, "data": raw_data}
         else:
-            # just opening + closing odds
-            for m in markets:
-                outcomes = m.get("outcomes", [])
-                if not outcomes:
+            raw_data = []
+    else:
+        raw_data = _odds_cache["data"]
+
+    report = []
+    rows_to_save = []
+    allowed_books = allowed_books or DEFAULT_BOOKS
+
+    for game in raw_data.get("events", []):
+        home = game.get("home_team")
+        away = game.get("away_team")
+        commence = game.get("commence_time")
+
+        for book in game.get("bookmakers", []):
+            if book["title"] not in allowed_books:
+                continue
+            for market in book.get("markets", []):
+                if market["key"] not in ["h2h", "spreads", "totals"] and not include_props:
                     continue
-                # first and last snapshot if available
-                first = outcomes[0]
-                last = outcomes[-1]
-                report.extend([
-                    {
+                for outcome in market.get("outcomes", []):
+                    entry = {
                         "home_team": home,
                         "away_team": away,
                         "commence_time": commence,
-                        "market": m.get("key"),
-                        "name": first.get("name"),
-                        "price": first.get("price"),
-                        "book": m.get("book"),
-                        "snapshot": "opening"
-                    },
-                    {
-                        "home_team": home,
-                        "away_team": away,
-                        "commence_time": commence,
-                        "market": m.get("key"),
-                        "name": last.get("name"),
-                        "price": last.get("price"),
-                        "book": m.get("book"),
-                        "snapshot": "closing"
+                        "book": book["title"],
+                        "market": market["key"],
+                        "name": outcome["name"],
+                        "price": outcome["price"],
                     }
-                ])
-    return report
+                    report.append(entry)
+
+                    # Format row for Sheets
+                    rows_to_save.append([
+                        now.isoformat(),
+                        home,
+                        away,
+                        market["key"],
+                        outcome["name"],
+                        outcome["price"],
+                        book["title"],
+                        f"snapshot_{now.strftime('%Y%m%d%H%M')}"
+                    ])
+
+    if rows_to_save:
+        append_to_sheet(rows_to_save)
+
+    # Survivor placeholder
+    survivor_state = {"week": double_from, "used": used or []}
+
+    return report, [], survivor_state
 
 
-def write_to_sheets(report):
-    """Append odds to Google Sheets"""
-    if not sheet:
-        return
-
-    rows = []
-    for r in report:
-        rows.append([
-            r.get("commence_time"),
-            r.get("home_team"),
-            r.get("away_team"),
-            r.get("market"),
-            r.get("name"),
-            r.get("price"),
-            r.get("book"),
-            r.get("snapshot", "")
-        ])
-    if rows:
-        sheet.append_rows(rows, value_input_option="RAW")
-
-
-def run_model(sport="nfl", log_full=False, allow_api=True):
-    """Main entry point called by Flask"""
-    if not allow_api:
-        return [], {}, {"week": 0, "used": []}
-
-    data = fetch_odds(sport)
-    report = parse_report(data, log_full=log_full)
-
-    # write to Google Sheets
-    write_to_sheets(report)
-
-    survivor_info = {"week": 13, "used": []}  # placeholder for survivor logic
-    return report, {}, survivor_info
+def save_excel(report, prev, filename, survivor=None):
+    df = pd.DataFrame(report)
+    df.to_excel(filename, index=False)
 
 
 def nowstamp():
-    return dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return dt.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
