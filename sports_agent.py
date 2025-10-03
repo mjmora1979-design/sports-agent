@@ -1,138 +1,114 @@
-import os
-import requests
-import pandas as pd
+import os, requests, pandas as pd
 from datetime import datetime, timedelta, timezone
 
-# Default sportsbooks (can be overridden in request JSON "books")
-DEFAULT_BOOKS = [
-    b.strip().lower() for b in os.environ.get("DEFAULT_BOOKS", "draftkings,bet365,fanduel").split(",")
-    if b.strip()
-]
+API_KEY = os.getenv("ODDS_API_KEY", "")
+API_URL = "https://api.the-odds-api.com/v4/sports"
 
-# Supported sports and fetch window
-SPORT_META = {
-    "nfl":   {"sport_id": "americanfootball_nfl",   "span": "week"},
-    "ncaaf": {"sport_id": "americanfootball_ncaaf", "span": "week"},
-    "nba":   {"sport_id": "basketball_nba",         "span": "day"},
-    "mlb":   {"sport_id": "baseball_mlb",           "span": "day"},
-    "ncaab": {"sport_id": "basketball_ncaab",       "span": "day"},
+SPORT_MAP = {
+    "nfl": "americanfootball_nfl",
+    "ncaaf": "americanfootball_ncaaf",
+    "nba": "basketball_nba",
+    "mlb": "baseball_mlb",
+    "ncaab": "basketball_ncaab"
 }
 
-# Market groups
+# Markets
 FEATURED_MARKETS = "h2h,spreads,totals"
 PROP_MARKETS = "player_pass_yds,player_rush_yds,player_receiving_yds,player_pass_tds,player_anytime_td"
 
-ODDS_API_KEY = os.environ.get("ODDS_API_KEY")
+# Default sportsbooks
+DEFAULT_BOOKS = "draftkings,bet365,fanduel"
 
-# -------------------------------------------------------------------
+
 def nowstamp():
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
+    return datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 
-def get_sport_window(span="day"):
-    """Return start and end times for the request window (day vs week)."""
-    now = datetime.now(timezone.utc)
-    if span == "week":
-        start = now - timedelta(days=1)
-        end = now + timedelta(days=7)
-    else:
-        start = now - timedelta(days=1)
-        end = now + timedelta(days=1)
-    return start, end
 
-def fetch_odds(sport_id, markets, books, span="day"):
-    """Fetch odds from The Odds API for a given sport, markets, and books."""
-    if not ODDS_API_KEY:
-        raise ValueError("Missing ODDS_API_KEY environment variable.")
-
-    start, end = get_sport_window(span)
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_id}/odds"
-
+def fetch_odds(sport_key, markets, books, span="day"):
+    url = f"{API_URL}/{sport_key}/odds"
     params = {
-        "apiKey": ODDS_API_KEY,
+        "apiKey": API_KEY,
         "regions": "us",
         "markets": markets,
         "oddsFormat": "american",
-        "dateFormat": "iso",
-        "bookmakers": ",".join(books)
+        "bookmakers": books
     }
 
-    resp = requests.get(url, params=params, timeout=20)
+    if span == "week":
+        # NFL/NCAAF → full week
+        params["dateFormat"] = "iso"
+    else:
+        # NBA/MLB/NCAAB → just today
+        params["dateFormat"] = "iso"
+
+    resp = requests.get(url, params=params)
     if resp.status_code != 200:
-        raise ValueError(f"HTTP Error {resp.status_code}: {resp.text}")
+        raise Exception(f"HTTP Error {resp.status_code}: {resp.text}")
+    return resp.json()
 
-    games = resp.json()
-    results = []
 
-    for g in games:
-        try:
-            commence = g.get("commence_time")
-            commence_dt = datetime.fromisoformat(commence.replace("Z", "+00:00"))
-            if not (start <= commence_dt <= end):
-                continue
-
-            for bm in g.get("bookmakers", []):
-                for market in bm.get("markets", []):
-                    for outcome in market.get("outcomes", []):
-                        results.append({
-                            "home_team": g.get("home_team"),
-                            "away_team": g.get("away_team"),
-                            "commence_time": commence_dt.strftime("%a, %d %b %Y %H:%M:%S GMT"),
-                            "book": bm.get("title"),
-                            "market": market.get("key"),
+def parse_odds(data, market_key):
+    rows = []
+    for game in data:
+        home = game.get("home_team")
+        away = game.get("away_team")
+        start = game.get("commence_time")
+        for bm in game.get("bookmakers", []):
+            book = bm.get("title")
+            for mkt in bm.get("markets", []):
+                if mkt.get("key") == market_key or market_key in mkt.get("key", ""):
+                    for outcome in mkt.get("outcomes", []):
+                        rows.append({
+                            "home_team": home,
+                            "away_team": away,
+                            "commence_time": start,
+                            "book": book,
+                            "market": mkt.get("key"),
                             "name": outcome.get("name"),
-                            "price": outcome.get("price"),
+                            "price": outcome.get("price")
                         })
-        except Exception as e:
-            print(f"Error parsing game: {e}")
+    return rows
 
-    return results
 
-# -------------------------------------------------------------------
-def run_model(
-    sport="nfl",
-    allow_api=False,
-    include_props=False,
-    books=None,
-    survivor=False,
-    used=None,
-    double_from=13,
-    game_filter=None,
-    max_games=None
-):
-    """Main model runner: fetch odds and build a report."""
-    if used is None:
-        used = []
+def run_model(mode="live", allow_api=False, survivor=False,
+              used=None, double_from=13, game_filter=None,
+              max_games=None, sport="nfl", include_props=False,
+              books=DEFAULT_BOOKS):
 
-    if sport not in SPORT_META:
-        raise ValueError(f"Unsupported sport: {sport}")
+    used = used or []
+    sport_id = SPORT_MAP.get(sport.lower())
+    if not sport_id:
+        raise Exception(f"Unsupported sport: {sport}")
 
-    sport_id = SPORT_META[sport]["sport_id"]
-    span = SPORT_META[sport]["span"]
+    span = "week" if sport in ["nfl", "ncaaf"] else "day"
 
-    books = [b.lower() for b in (books or DEFAULT_BOOKS)]
-
-    # Fetch core markets
     report = []
     if allow_api:
-        report.extend(fetch_odds(sport_id, FEATURED_MARKETS, books, span=span))
+        # Main odds (h2h, spreads, totals)
+        report.extend(parse_odds(fetch_odds(sport_id, FEATURED_MARKETS, books, span=span), "h2h"))
+        report.extend(parse_odds(fetch_odds(sport_id, FEATURED_MARKETS, books, span=span), "spreads"))
+        report.extend(parse_odds(fetch_odds(sport_id, FEATURED_MARKETS, books, span=span), "totals"))
+
+        # Props (safe fetch one by one)
         if include_props:
-            report.extend(fetch_odds(sport_id, PROP_MARKETS, books, span=span))
+            for market in PROP_MARKETS.split(","):
+                try:
+                    prop_json = fetch_odds(sport_id, market.strip(), books, span=span)
+                    if prop_json:
+                        report.extend(parse_odds(prop_json, market.strip()))
+                except Exception as e:
+                    print(f"Skipping prop market {market}: {e}")
 
-    # Survivor placeholder logic
-    surv = {"week": double_from, "used": used}
+    # Survivor metadata (simple placeholder)
+    survivor_meta = {"week": double_from, "used": used}
 
-    # Previous picks placeholder
-    prev = []
+    return report, [], survivor_meta
 
-    return report, prev, surv
 
-# -------------------------------------------------------------------
-def save_excel(report, prev, filename, survivor=None):
-    """Save the report into an Excel workbook."""
-    with pd.ExcelWriter(filename, engine="openpyxl") as writer:
-        if report:
-            pd.DataFrame(report).to_excel(writer, sheet_name="Report", index=False)
-        if prev:
-            pd.DataFrame(prev).to_excel(writer, sheet_name="Previous", index=False)
+def save_excel(report, prev, path, survivor=None):
+    df = pd.DataFrame(report)
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Report", index=False)
+        pd.DataFrame(prev).to_excel(writer, sheet_name="Prev", index=False)
         if survivor:
             pd.DataFrame([survivor]).to_excel(writer, sheet_name="Survivor", index=False)
