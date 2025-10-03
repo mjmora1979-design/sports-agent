@@ -24,6 +24,46 @@ def get_current_football_week():
         return datetime.date.today().isocalendar()[1]  # ISO week fallback
 
 # -------------------------
+# Helpers
+# -------------------------
+
+def summarize_best_prices(game):
+    """Return neutral summary with best ML/spread/total across books."""
+    summary = {
+        "best_moneyline_by_team": {},
+        "best_spread_by_team": {},
+        "best_total": {}
+    }
+
+    books = game.get("books", {})
+    # --- Moneyline
+    for book, data in books.items():
+        for team, price in data.get("h2h", {}).items():
+            if team not in summary["best_moneyline_by_team"] or price > summary["best_moneyline_by_team"][team]["price"]:
+                summary["best_moneyline_by_team"][team] = {"book": book, "price": price}
+
+    # --- Spreads
+    for book, data in books.items():
+        for spread in data.get("spreads", []):
+            team = spread.get("name")
+            price = spread.get("price")
+            point = spread.get("point")
+            if team not in summary["best_spread_by_team"] or price > summary["best_spread_by_team"][team]["price"]:
+                summary["best_spread_by_team"][team] = {"book": book, "price": price, "point": point}
+
+    # --- Totals
+    for book, data in books.items():
+        totals = data.get("totals", {})
+        for side in ["Over", "Under"]:
+            if side in totals:
+                price = totals[side].get("price")
+                point = totals[side].get("point")
+                if side not in summary["best_total"] or price > summary["best_total"][side]["price"]:
+                    summary["best_total"][side] = {"book": book, "price": price, "point": point}
+
+    return summary
+
+# -------------------------
 # Payload builder
 # -------------------------
 
@@ -47,31 +87,68 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
             event_id = ev.get("id")
             commence = ev.get("commence_time")
 
+            # Normalize book structure (DraftKings/FanDuel only)
+            books = {}
+            for book, data in ev.get("books", {}).items():
+                book_name = "DraftKings" if "draftkings" in book.lower() else \
+                            "FanDuel" if "fanduel" in book.lower() else book
+                books[book_name] = {
+                    "h2h": data.get("h2h", {}),
+                    "spreads": data.get("spreads", []),
+                    "totals": data.get("totals", {}),
+                    "props": data.get("props", {})
+                }
+
             game = {
                 "home_team": home,
                 "away_team": away,
                 "commence_time": commence,
-                "books": ev.get("books", {}),
-                "summary": {}  # TODO: add neutral best-price summary logic
+                "books": books,
+                "summary": summarize_best_prices({"books": books})
             }
             games.append(game)
 
             # Flatten for sheets logging
-            for book, data in ev.get("books", {}).items():
-                for market, lines in data.get("markets", {}).items():
-                    for line in lines:
-                        rows_for_sheets.append({
-                            "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
-                            "event_id": event_id,
-                            "commence_time": commence,
-                            "home": home,
-                            "away": away,
-                            "book": book,
-                            "market": market,
-                            "label": line.get("label",""),
-                            "price": line.get("price",""),
-                            "point_or_line": line.get("point","")
-                        })
+            for book, data in books.items():
+                for team, price in data.get("h2h", {}).items():
+                    rows_for_sheets.append({
+                        "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
+                        "event_id": event_id,
+                        "commence_time": commence,
+                        "home": home,
+                        "away": away,
+                        "book": book,
+                        "market": "moneyline",
+                        "label": team,
+                        "price": price,
+                        "point_or_line": ""
+                    })
+                for spread in data.get("spreads", []):
+                    rows_for_sheets.append({
+                        "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
+                        "event_id": event_id,
+                        "commence_time": commence,
+                        "home": home,
+                        "away": away,
+                        "book": book,
+                        "market": "spread",
+                        "label": spread.get("name"),
+                        "price": spread.get("price"),
+                        "point_or_line": spread.get("point")
+                    })
+                for side, val in data.get("totals", {}).items():
+                    rows_for_sheets.append({
+                        "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
+                        "event_id": event_id,
+                        "commence_time": commence,
+                        "home": home,
+                        "away": away,
+                        "book": book,
+                        "market": "total",
+                        "label": side,
+                        "price": val.get("price"),
+                        "point_or_line": val.get("point")
+                    })
 
     # ✅ Write to Sheets if enabled
     if rows_for_sheets:
