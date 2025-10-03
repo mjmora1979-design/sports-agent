@@ -14,16 +14,18 @@ def root():
 @app.route("/run", methods=["POST"])
 def run():
     data = request.get_json() or {}
-    sport = data.get("sport", "nfl")
+    mode = data.get("mode", "live")
     allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
     survivor = data.get("survivor", False)
     used = data.get("used", [])
     double_from = int(data.get("double_from", 13))
     game_filter = data.get("game_filter", None)
     max_games = data.get("max_games", None)
+    sport = data.get("sport", "nfl")
 
     try:
         report, prev, surv = sports_agent.run_model(
+            mode=mode,
             allow_api=allow_api,
             survivor=survivor,
             used=used,
@@ -39,16 +41,18 @@ def run():
 @app.route("/excel", methods=["POST"])
 def excel():
     data = request.get_json() or {}
-    sport = data.get("sport", "nfl")
+    mode = data.get("mode", "live")
     allow_api = data.get("allow_api", False) or request.headers.get("X-ALLOW-API", "") == "1"
     survivor = data.get("survivor", False)
     used = data.get("used", [])
     double_from = int(data.get("double_from", 13))
     game_filter = data.get("game_filter", None)
     max_games = data.get("max_games", None)
+    sport = data.get("sport", "nfl")
 
     try:
         report, prev, surv = sports_agent.run_model(
+            mode=mode,
             allow_api=allow_api,
             survivor=survivor,
             used=used,
