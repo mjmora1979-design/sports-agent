@@ -1,7 +1,6 @@
 import os
 import requests
 import pandas as pd
-import numpy as np
 import datetime
 from openpyxl import Workbook
 
@@ -35,11 +34,11 @@ def get_global_odds(allow_api: bool = False, sport: str = "nfl"):
     # Determine scheduling
     today = datetime.datetime.utcnow()
     if sport.lower() in ["nfl", "ncaaf"]:
-        # Full week window (Mon–Sun)
-        start_date = today - datetime.timedelta(days=today.weekday())  # Monday
+        # Week window (Monday → Sunday)
+        start_date = today - datetime.timedelta(days=today.weekday())
         end_date = start_date + datetime.timedelta(days=7)
     else:
-        # Just today's games
+        # Only today
         start_date = today
         end_date = today + datetime.timedelta(days=1)
 
