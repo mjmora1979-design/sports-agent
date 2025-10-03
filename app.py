@@ -24,9 +24,10 @@ def run():
     sport = data.get("sport", "nfl")
     include_props = data.get("include_props", False)
     books = data.get("books", sports_agent.DEFAULT_BOOKS)
+    debug = data.get("debug", False)
 
     try:
-        report, prev, surv = sports_agent.run_model(
+        result = sports_agent.run_model(
             mode=mode,
             allow_api=allow_api,
             survivor=survivor,
@@ -36,9 +37,15 @@ def run():
             max_games=max_games,
             sport=sport,
             include_props=include_props,
-            books=books
+            books=books,
+            debug=debug
         )
-        return jsonify({"status": "success", "report": report, "survivor": surv})
+        if debug:
+            report, prev, surv, skipped = result
+            return jsonify({"status": "success", "report": report, "survivor": surv, "skipped_props": skipped})
+        else:
+            report, prev, surv = result
+            return jsonify({"status": "success", "report": report, "survivor": surv})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
