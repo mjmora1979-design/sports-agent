@@ -28,14 +28,16 @@ def get_current_football_week():
 # -------------------------
 
 def summarize_best_prices(game):
-    """Return neutral summary with best ML/spread/total across books."""
+    """Return neutral summary with best ML/spread/total/props across books."""
     summary = {
         "best_moneyline_by_team": {},
         "best_spread_by_team": {},
-        "best_total": {}
+        "best_total": {},
+        "best_props": {}
     }
 
     books = game.get("books", {})
+
     # --- Moneyline
     for book, data in books.items():
         for team, price in data.get("h2h", {}).items():
@@ -60,6 +62,27 @@ def summarize_best_prices(game):
                 point = totals[side].get("point")
                 if side not in summary["best_total"] or price > summary["best_total"][side]["price"]:
                     summary["best_total"][side] = {"book": book, "price": price, "point": point}
+
+    # --- Props (passing yards, rushing, receiving, anytime TD, passing TDs)
+    prop_targets = ["passing_yards", "rushing_yards", "receiving_yards", "anytime_td", "passing_tds"]
+    for book, data in books.items():
+        props = data.get("props", {})
+        for prop_name, players in props.items():
+            if prop_name in prop_targets:
+                if prop_name not in summary["best_props"]:
+                    summary["best_props"][prop_name] = {}
+                for player, lines in players.items():
+                    # lines expected: {"Over": {"point": xx, "price": yy}, "Under": {...}}
+                    for side, line in lines.items():
+                        current = summary["best_props"][prop_name].get(player, {}).get(side)
+                        if not current or line.get("price", -9999) > current["price"]:
+                            if player not in summary["best_props"][prop_name]:
+                                summary["best_props"][prop_name][player] = {}
+                            summary["best_props"][prop_name][player][side] = {
+                                "book": book,
+                                "point": line.get("point"),
+                                "price": line.get("price")
+                            }
 
     return summary
 
@@ -96,7 +119,7 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
                     "h2h": data.get("h2h", {}),
                     "spreads": data.get("spreads", []),
                     "totals": data.get("totals", {}),
-                    "props": data.get("props", {})
+                    "props": data.get("props", {})  # props now included
                 }
 
             game = {
@@ -110,6 +133,7 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
 
             # Flatten for sheets logging
             for book, data in books.items():
+                # moneylines
                 for team, price in data.get("h2h", {}).items():
                     rows_for_sheets.append({
                         "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
@@ -123,6 +147,7 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
                         "price": price,
                         "point_or_line": ""
                     })
+                # spreads
                 for spread in data.get("spreads", []):
                     rows_for_sheets.append({
                         "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
@@ -136,6 +161,7 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
                         "price": spread.get("price"),
                         "point_or_line": spread.get("point")
                     })
+                # totals
                 for side, val in data.get("totals", {}).items():
                     rows_for_sheets.append({
                         "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
@@ -149,6 +175,22 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
                         "price": val.get("price"),
                         "point_or_line": val.get("point")
                     })
+                # props
+                for prop_name, players in data.get("props", {}).items():
+                    for player, lines in players.items():
+                        for side, line in lines.items():
+                            rows_for_sheets.append({
+                                "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
+                                "event_id": event_id,
+                                "commence_time": commence,
+                                "home": home,
+                                "away": away,
+                                "book": book,
+                                "market": prop_name,
+                                "label": f"{player} {side}",
+                                "price": line.get("price"),
+                                "point_or_line": line.get("point")
+                            })
 
     # ✅ Write to Sheets if enabled
     if rows_for_sheets:
