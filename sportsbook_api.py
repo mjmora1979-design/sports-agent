@@ -1,87 +1,64 @@
-import os
-import requests
-import datetime
+import os, requests, datetime
+import nfl_data_py as nfl
 
-# -------------------------
-# Config
-# -------------------------
+API_HOST = os.getenv("SPORTSBOOK_RAPIDAPI_HOST", "sportsbook-api2.p.rapidapi.com")
+API_KEY = os.getenv("SPORTSBOOK_RAPIDAPI_KEY", None)
+BOOKS_DEFAULT = os.getenv("BOOKS_DEFAULT", "draftkings,fanduel")
 
-API_KEY = os.getenv("SPORTSBOOK_RAPIDAPI_KEY")
-API_HOST = os.getenv("SPORTSBOOK_RAPIDAPI_HOST")
+def current_week():
+    """Detect current NFL week (fallback to 1)."""
+    try:
+        # safer fallback using nfl_data_py
+        season = nfl.current_year()
+        sched = nfl.import_schedules([season])
+        today = datetime.date.today()
+        sched["gameday"] = sched["gameday"].astype(str)
+        for wk in sorted(sched["week"].unique()):
+            week_games = sched[sched["week"] == wk]
+            dates = [datetime.date.fromisoformat(d) for d in week_games["gameday"] if d != "nan"]
+            if dates and min(dates) <= today <= max(dates):
+                return int(wk)
+    except Exception as e:
+        print("[WARN] Week detection failed, fallback:", e)
+    return 1
 
-BOOKS_DEFAULT = os.getenv("BOOKS_DEFAULT", "draftkings,fanduel").split(",")
-CACHE_TTL = int(os.getenv("CACHE_TTL_SEC", "7200"))  # 2 hours
-
-# -------------------------
-# Internal cache
-# -------------------------
-
-def _make_cache_key(sport, start, end, books):
-    return f"{sport}:{start}:{end}:{','.join(sorted(books))}"
-
-_cache = {}
-
-# -------------------------
-# API Calls
-# -------------------------
-
-def get_odds_for_sport(sport, start, end, books=None):
-    """
-    Fetch odds for a sport from RapidAPI.
-    Caches for CACHE_TTL seconds to stay under limits.
-    """
-    if books is None:
-        books = BOOKS_DEFAULT
-
-    cache_key = _make_cache_key(sport, start, end, books)
-    now = datetime.datetime.utcnow().timestamp()
-
-    # Check cache
-    if cache_key in _cache:
-        ts, data = _cache[cache_key]
-        if now - ts < CACHE_TTL:
-            return data
-
-    # ✅ Correct endpoint: /v1/odds
-    url = f"https://{API_HOST}/v1/odds"
-    headers = {
-        "X-RapidAPI-Key": API_KEY,
-        "X-RapidAPI-Host": API_HOST
-    }
+def get_odds(sport="nfl", region="us", markets=None, books=None):
+    """Fetch odds from RapidAPI sportsbook."""
+    url = f"https://{API_HOST}/v1/odds"   # <-- FIXED ENDPOINT
     params = {
         "sport": sport,
-        "region": "us",
-        "mkt": "h2h,spreads,totals,player_props",
-        "oddsFormat": "american"
+        "region": region,
+        "mkt": markets or "h2h,spreads,totals,player_props",
+        "oddsFormat": "american",
+        "bookmakers": books or BOOKS_DEFAULT,
     }
+    headers = {"X-RapidAPI-Host": API_HOST}
+    if API_KEY:
+        headers["X-RapidAPI-Key"] = API_KEY
 
-    # Debug logging
-    print(f"[DEBUG] Requesting odds from: {url}")
-    print(f"[DEBUG] Params: {params}")
-    print(f"[DEBUG] Headers (no key): {{'X-RapidAPI-Host': '{API_HOST}'}}")
+    print("[DEBUG] Requesting odds from:", url)
+    print("[DEBUG] Params:", params)
+    print("[DEBUG] Headers (key hidden):", {k: ("***" if "Key" in k else v) for k, v in headers.items()})
 
     try:
-        resp = requests.get(url, headers=headers, params=params, timeout=15)
-        print(f"[DEBUG] Response status: {resp.status_code}")
-        if resp.status_code != 200:
-            print(f"[DEBUG] Response text: {resp.text[:300]}")
-            return []
-        data = resp.json()
+        r = requests.get(url, headers=headers, params=params, timeout=20)
+        print("[DEBUG] Response status:", r.status_code)
+        if r.status_code != 200:
+            print("[DEBUG] Response text:", r.text)
+            return {"status": "error", "games": [], "message": r.text}
+        data = r.json()
+        return {"status": "success", "games": data.get("games", [])}
     except Exception as e:
-        print(f"[ERROR] Odds request failed: {e}")
-        return []
+        print("[ERROR] Odds request failed:", e)
+        return {"status": "error", "games": [], "message": str(e)}
 
-    # Filter to requested books only
-    filtered = []
-    for ev in data.get("events", []):
-        game_books = {}
-        for b in ev.get("books", []):
-            if b["book_key"] in books:
-                game_books[b["book_key"]] = b
-        if game_books:
-            ev["books"] = game_books
-            filtered.append(ev)
-
-    # Cache result
-    _cache[cache_key] = (now, filtered)
-    return filtered
+def rows_for_sheets(games, week):
+    """Flatten games for Sheets logging."""
+    rows = []
+    for g in games:
+        home = g.get("home_team")
+        away = g.get("away_team")
+        commence = g.get("commence_time")
+        markets = [m["key"] for m in g.get("markets", [])] if "markets" in g else []
+        rows.append([week, home, away, commence, ",".join(markets)])
+    return rows
