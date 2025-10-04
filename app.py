@@ -1,77 +1,69 @@
 import os
-import traceback
 from flask import Flask, request, jsonify
 from sports_agent import build_payload, to_excel
 
 app = Flask(__name__)
 
 # -------------------------
-# Health check
+# Healthcheck root
 # -------------------------
 @app.route("/", methods=["GET"])
-def index():
-    return jsonify({"status": "running"}), 200
+def home():
+    return jsonify({"status": "ok", "message": "Sports Agent API is live"}), 200
 
 # -------------------------
-# Config endpoint
-# -------------------------
-@app.route("/config", methods=["GET"])
-def get_config():
-    return jsonify({
-        "BOOKS_DEFAULT": os.getenv("BOOKS_DEFAULT", ""),
-        "CACHE_TTL_SEC": os.getenv("CACHE_TTL_SEC", ""),
-        "GSHEET_ID": os.getenv("GSHEET_ID", ""),
-        "SHEETS_ENABLED": os.getenv("SHEETS_ENABLED", "0"),
-        "SPORTSBOOK_RAPIDAPI_HOST": os.getenv("SPORTSBOOK_RAPIDAPI_HOST", "")
-    })
-
-# -------------------------
-# Main run endpoint
+# Run payload builder
 # -------------------------
 @app.route("/run", methods=["POST"])
 def run():
     try:
-        data = request.json or {}
-        sport = data.get("sport", "nfl").lower()
+        data = request.get_json(force=True)
+
+        sport = data.get("sport", "nfl")
         allow_api = data.get("allow_api", True)
-        game_filter = data.get("filter")
+        game_filter = data.get("game_filter")
         max_games = data.get("max_games")
+        mode = data.get("mode", "open")   # ✅ new param to control open/closed odds
 
         payload = build_payload(
             sport,
             allow_api=allow_api,
             game_filter=game_filter,
-            max_games=max_games
+            max_games=max_games,
+            mode=mode
         )
-        return jsonify(payload)
+        return jsonify(payload), 200
     except Exception as e:
-        print("[ERROR] in /run:", e)
-        traceback.print_exc()
+        print("[ERROR] /run failed:", e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # -------------------------
-# Excel export endpoint
+# Excel export
 # -------------------------
 @app.route("/export", methods=["POST"])
 def export():
     try:
-        data = request.json or {}
-        payload = build_payload(data.get("sport", "nfl"), allow_api=True)
-        excel_bytes = to_excel(payload)
-
-        return (
-            excel_bytes,
-            200,
-            {
-                "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "Content-Disposition": "attachment; filename=odds.xlsx",
-            },
+        data = request.get_json(force=True)
+        payload = build_payload(
+            data.get("sport", "nfl"),
+            allow_api=data.get("allow_api", True),
+            game_filter=data.get("game_filter"),
+            max_games=data.get("max_games"),
+            mode=data.get("mode", "open")
         )
+        xlsx_bytes = to_excel(payload)
+
+        from flask import Response
+        response = Response(xlsx_bytes, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        response.headers.set("Content-Disposition", "attachment", filename="odds.xlsx")
+        return response
     except Exception as e:
-        print("[ERROR] in /export:", e)
-        traceback.print_exc()
+        print("[ERROR] /export failed:", e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
-
+# -------------------------
+# Main entrypoint
+# -------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
