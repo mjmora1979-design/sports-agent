@@ -10,18 +10,21 @@ def home():
     return jsonify({
         "status": "online",
         "service": "sports-agent",
-        "endpoints": ["/test-api", "/run"]
+        "endpoints": [
+            "/test-api (GET) - Test API connection",
+            "/run (POST) - Get sports data"
+        ]
     })
 
 @app.route("/test-api", methods=["GET"])
 def test_api():
-    """Test Sportsbook API to find working endpoint"""
+    """Test endpoint to find working Sportsbook API configuration"""
     api_key = os.getenv('RAPIDAPI_KEY')
     
     if not api_key:
         return jsonify({
             'status': 'error',
-            'message': 'RAPIDAPI_KEY not set'
+            'message': 'RAPIDAPI_KEY not set in environment'
         }), 500
     
     test_configs = [
@@ -31,7 +34,7 @@ def test_api():
             'params': {'sport': 'americanfootball_nfl'}
         },
         {
-            'name': 'v0/events without slash',
+            'name': 'v0/events without trailing slash',
             'url': 'https://sportsbook-api2.p.rapidapi.com/v0/events',
             'params': {'sport': 'americanfootball_nfl'}
         },
@@ -39,6 +42,11 @@ def test_api():
             'name': 'v1/events',
             'url': 'https://sportsbook-api2.p.rapidapi.com/v1/events',
             'params': {'sport': 'americanfootball_nfl'}
+        },
+        {
+            'name': 'v0/events/ with sport=nfl',
+            'url': 'https://sportsbook-api2.p.rapidapi.com/v0/events/',
+            'params': {'sport': 'nfl'}
         }
     ]
     
@@ -66,14 +74,20 @@ def test_api():
             }
             
             if response.status_code == 200:
-                data = response.json()
-                events_count = len(data.get('events', [])) if isinstance(data, dict) else len(data) if isinstance(data, list) else 0
-                result['events_count'] = events_count
-                result['has_data'] = events_count > 0
-                
-                if events_count > 0 and not working_config:
-                    working_config = config
-                    result['✅'] = 'USE THIS ONE!'
+                try:
+                    data = response.json()
+                    events_count = len(data.get('events', [])) if isinstance(data, dict) else len(data) if isinstance(data, list) else 0
+                    
+                    result['events_count'] = events_count
+                    result['has_data'] = events_count > 0
+                    
+                    if events_count > 0:
+                        result['✅'] = 'WORKING!'
+                        if not working_config:
+                            working_config = config
+                            
+                except Exception as e:
+                    result['error'] = str(e)
             else:
                 result['error'] = response.text[:200]
             
@@ -82,20 +96,22 @@ def test_api():
         except Exception as e:
             results.append({
                 'test': config['name'],
-                'error': str(e)
+                'error': str(e),
+                'success': False
             })
     
     recommendation = None
     if working_config:
         recommendation = {
-            'message': '✅ WORKING ENDPOINT FOUND',
-            'update_sportsbook_api': f"url = f'https://{{API_HOST}}{working_config['url'].split('.com')[1]}'",
-            'sport_param': working_config['params']['sport']
+            'message': '✅ FOUND WORKING ENDPOINT!',
+            'url': working_config['url'],
+            'sport_param': working_config['params'].get('sport'),
+            'next_step': 'This configuration is already in your updated sportsbook_api.py'
         }
     else:
         recommendation = {
-            'message': '❌ No working endpoint',
-            'action': 'Check RapidAPI dashboard'
+            'message': '❌ No working endpoint found',
+            'action': 'Check RapidAPI subscription and key'
         }
     
     return jsonify({
@@ -106,11 +122,20 @@ def test_api():
 
 @app.route("/run", methods=["POST"])
 def run():
-    """Main endpoint for ChatGPT to fetch sports data"""
+    """
+    Main endpoint for ChatGPT integration.
+    
+    POST Body:
+    {
+        "sport": "nfl",
+        "allow_api": true,
+        "max_games": 10
+    }
+    """
     try:
-        body = request.get_json(force=True) or {}
+        body = request.get_json(force=True)
         sport = body.get("sport", "nfl")
-        allow_api = body.get("allow_api", True)
+        allow_api = body.get("allow_api", False)
         max_games = body.get("max_games", 10)
         
         payload = build_payload(
@@ -118,12 +143,13 @@ def run():
             allow_api=allow_api,
             max_games=max_games
         )
+        
         return jsonify(payload)
         
     except Exception as e:
         app.logger.error(f"/run failed: {e}", exc_info=True)
         return jsonify({
-            "status": "error", 
+            "status": "error",
             "message": str(e)
         }), 500
 
