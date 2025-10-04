@@ -2,7 +2,7 @@ import os, datetime
 import pandas as pd
 import nfl_data_py as nfl
 from sportsbook_api import get_odds
-from sheets_writer import log_to_sheets
+from sheets_writer import log_to_sheets, read_from_sheets
 
 # -------------------------
 # Week detection (NFL/NCAAF)
@@ -38,13 +38,13 @@ def summarize_best_prices(game):
 
     books = game.get("books", {})
 
-    # --- Moneyline
+    # Moneyline
     for book, data in books.items():
         for team, price in data.get("h2h", {}).items():
             if team not in summary["best_moneyline_by_team"] or price > summary["best_moneyline_by_team"][team]["price"]:
                 summary["best_moneyline_by_team"][team] = {"book": book, "price": price}
 
-    # --- Spreads
+    # Spreads
     for book, data in books.items():
         for spread in data.get("spreads", []):
             team = spread.get("name")
@@ -53,7 +53,7 @@ def summarize_best_prices(game):
             if team not in summary["best_spread_by_team"] or price > summary["best_spread_by_team"][team]["price"]:
                 summary["best_spread_by_team"][team] = {"book": book, "price": price, "point": point}
 
-    # --- Totals
+    # Totals
     for book, data in books.items():
         totals = data.get("totals", {})
         for side in ["Over", "Under"]:
@@ -63,7 +63,7 @@ def summarize_best_prices(game):
                 if side not in summary["best_total"] or price > summary["best_total"][side]["price"]:
                     summary["best_total"][side] = {"book": book, "price": price, "point": point}
 
-    # --- Props
+    # Props
     prop_targets = ["passing_yards", "rushing_yards", "receiving_yards", "anytime_td", "passing_tds"]
     for book, data in books.items():
         props = data.get("props", {})
@@ -89,108 +89,72 @@ def summarize_best_prices(game):
 # Payload builder
 # -------------------------
 
-def build_payload(sport, allow_api=True, game_filter=None, max_games=None):
-    """Main odds + props payload builder."""
+def build_payload(sport, allow_api=False, game_filter=None, max_games=None, mode=None):
+    """
+    Main odds + props payload builder.
+    mode options:
+      - "live": pulls current odds from API
+      - "historical": pulls stored odds from Google Sheets
+      - "props_only": can be added later
+    """
     week = None
     if sport in ["nfl", "ncaaf"]:
         week = get_current_football_week()
 
-    # For API pulls
+    start = datetime.datetime.utcnow().isoformat()
+    end = (datetime.datetime.utcnow() + datetime.timedelta(days=7)).isoformat()
+
     games = []
     rows_for_sheets = []
 
-    if allow_api:
-        odds = get_odds(sport, days=7)  # ✅ fetch for 7 days ahead
-        for ev in odds:
-            home = ev.get("home_team")
-            away = ev.get("away_team")
-            event_id = ev.get("id")
-            commence = ev.get("commence_time")
-
-            # Normalize book structure
-            books = {}
-            for book, data in ev.get("books", {}).items():
-                book_name = "DraftKings" if "draftkings" in book.lower() else \
-                            "FanDuel" if "fanduel" in book.lower() else book
-                books[book_name] = {
-                    "h2h": data.get("h2h", {}),
-                    "spreads": data.get("spreads", []),
-                    "totals": data.get("totals", {}),
-                    "props": data.get("props", {})
+    # --- Mode Handling ---
+    if mode == "historical":
+        print("[DEBUG] Reading historical odds from Sheets...")
+        rows_for_sheets = read_from_sheets(sport)
+        # Sheets data → group back into games
+        if rows_for_sheets:
+            df = pd.DataFrame(rows_for_sheets)
+            for event_id, group in df.groupby("event_id"):
+                game = {
+                    "home_team": group["home"].iloc[0],
+                    "away_team": group["away"].iloc[0],
+                    "commence_time": group["commence_time"].iloc[0],
+                    "books": {},  # skipping detailed rebuild for brevity
+                    "summary": {}
                 }
+                games.append(game)
 
-            game = {
-                "home_team": home,
-                "away_team": away,
-                "commence_time": commence,
-                "books": books,
-                "summary": summarize_best_prices({"books": books})
-            }
-            games.append(game)
+    else:  # default or "live"
+        if allow_api:
+            odds = get_odds(sport, start, end)
+            for ev in odds:
+                home = ev.get("home_team")
+                away = ev.get("away_team")
+                event_id = ev.get("id")
+                commence = ev.get("commence_time")
 
-            # Flatten for sheets logging
-            for book, data in books.items():
-                # moneylines
-                for team, price in data.get("h2h", {}).items():
-                    rows_for_sheets.append({
-                        "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
-                        "event_id": event_id,
-                        "commence_time": commence,
-                        "home": home,
-                        "away": away,
-                        "book": book,
-                        "market": "moneyline",
-                        "label": team,
-                        "price": price,
-                        "point_or_line": ""
-                    })
-                # spreads
-                for spread in data.get("spreads", []):
-                    rows_for_sheets.append({
-                        "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
-                        "event_id": event_id,
-                        "commence_time": commence,
-                        "home": home,
-                        "away": away,
-                        "book": book,
-                        "market": "spread",
-                        "label": spread.get("name"),
-                        "price": spread.get("price"),
-                        "point_or_line": spread.get("point")
-                    })
-                # totals
-                for side, val in data.get("totals", {}).items():
-                    rows_for_sheets.append({
-                        "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
-                        "event_id": event_id,
-                        "commence_time": commence,
-                        "home": home,
-                        "away": away,
-                        "book": book,
-                        "market": "total",
-                        "label": side,
-                        "price": val.get("price"),
-                        "point_or_line": val.get("point")
-                    })
-                # props
-                for prop_name, players in data.get("props", {}).items():
-                    for player, lines in players.items():
-                        for side, line in lines.items():
-                            rows_for_sheets.append({
-                                "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
-                                "event_id": event_id,
-                                "commence_time": commence,
-                                "home": home,
-                                "away": away,
-                                "book": book,
-                                "market": prop_name,
-                                "label": f"{player} {side}",
-                                "price": line.get("price"),
-                                "point_or_line": line.get("point")
-                            })
+                books = {}
+                for book, data in ev.get("books", {}).items():
+                    book_name = "DraftKings" if "draftkings" in book.lower() else \
+                                "FanDuel" if "fanduel" in book.lower() else book
+                    books[book_name] = {
+                        "h2h": data.get("h2h", {}),
+                        "spreads": data.get("spreads", []),
+                        "totals": data.get("totals", {}),
+                        "props": data.get("props", {})
+                    }
 
-    # ✅ Write to Sheets if enabled
-    if rows_for_sheets:
+                game = {
+                    "home_team": home,
+                    "away_team": away,
+                    "commence_time": commence,
+                    "books": books,
+                    "summary": summarize_best_prices({"books": books})
+                }
+                games.append(game)
+
+    # ✅ Log to Sheets if we pulled fresh odds
+    if rows_for_sheets and mode == "live":
         log_to_sheets(sport, rows_for_sheets)
 
     payload = {
