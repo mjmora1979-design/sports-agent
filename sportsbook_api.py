@@ -1,170 +1,122 @@
+# sportsbook_api.py
+# Unified RapidAPI Sportsbook API client
+# Supports events, odds, props, and advantages (DraftKings + FanDuel only)
+
 import os
 import requests
+import json
 
-# ===========================
-# Configuration
-# ===========================
-
-BASE_URL = "https://sportsbook-api2.p.rapidapi.com/v0"
 RAPIDAPI_HOST = "sportsbook-api2.p.rapidapi.com"
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY") or os.getenv("SPORTSBOOK_RAPIDAPI_KEY")
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
 
-HEADERS = {
-    "X-RapidAPI-Key": RAPIDAPI_KEY,
-    "X-RapidAPI-Host": RAPIDAPI_HOST
+if not RAPIDAPI_KEY:
+    print("[ERROR] RAPIDAPI_KEY not found in environment variables!")
+
+BASE_URLS = {
+    "v0": f"https://{RAPIDAPI_HOST}/v0",
+    "v1": f"https://{RAPIDAPI_HOST}/v1"
 }
 
+HEADERS = {
+    "x-rapidapi-host": RAPIDAPI_HOST,
+    "x-rapidapi-key": RAPIDAPI_KEY
+}
 
-# ===========================
-# Core API Functions
-# ===========================
-
-def list_competitions():
-    """
-    Get all available competitions (NFL, NBA, etc.)
-    Example endpoint: /v0/competitions
-    """
-    url = f"{BASE_URL}/competitions"
-    print("[DEBUG] GET", url)
+# -------------------------------------------------------------
+# Helper function to make a request and safely handle responses
+# -------------------------------------------------------------
+def safe_request(url, params=None):
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        print("[DEBUG] Status:", resp.status_code)
-        if resp.status_code == 200:
-            data = resp.json()
-            comps = data.get("competitions", [])
-            print(f"[DEBUG] Found {len(comps)} competitions")
-            return comps
+        response = requests.get(url, headers=HEADERS, params=params, timeout=10)
+        print(f"[DEBUG] GET {url} -> {response.status_code}")
+        if response.status_code == 200:
+            return response.json()
         else:
-            return {"error": f"HTTP {resp.status_code}", "text": resp.text}
+            return {"status": response.status_code, "url": url, "error": response.text}
     except Exception as e:
-        print("[ERROR] list_competitions:", e)
-        return {"error": str(e)}
+        print(f"[ERROR] Request failed: {e}")
+        return {"error": str(e), "url": url}
 
+# -------------------------------------------------------------
+# 1️⃣ Competitions and Events
+# -------------------------------------------------------------
+def get_competitions():
+    """Fetch all available competitions (NFL, NBA, etc.)."""
+    url = f"{BASE_URLS['v0']}/competitions/"
+    return safe_request(url)
 
-def get_events_for_competition(competition_key: str, event_type: str = "MATCH"):
+def get_events(competition_key: str):
+    """Fetch all events for a competition (e.g., Q63E-wddv-ddp4 for NFL)."""
+    url = f"{BASE_URLS['v0']}/competitions/{competition_key}/events"
+    params = {"eventType": "MATCH"}
+    return safe_request(url, params=params)
+
+def get_event_details(event_key: str):
+    """Fetch specific event details by key."""
+    url = f"{BASE_URLS['v0']}/events/{event_key}"
+    return safe_request(url)
+
+# -------------------------------------------------------------
+# 2️⃣ Odds & Props Data
+# -------------------------------------------------------------
+def get_event_markets(event_key: str):
     """
-    Get all events under a competition (e.g. NFL games)
-    Example endpoint:
-    /v0/competitions/{competitionKey}/events?eventType=MATCH
+    Fetch markets (odds + props) for a given event.
+    This often includes team props, player props, totals, etc.
     """
-    url = f"{BASE_URL}/competitions/{competition_key}/events"
-    params = {"eventType": event_type}
-    print("[DEBUG] GET", url, params)
-    try:
-        resp = requests.get(url, headers=HEADERS, params=params, timeout=10)
-        print("[DEBUG] Status:", resp.status_code)
-        if resp.status_code == 200:
-            data = resp.json()
-            events = data.get("events", [])
-            print(f"[DEBUG] Retrieved {len(events)} events")
-            return events
-        else:
-            return {"error": f"HTTP {resp.status_code}", "text": resp.text}
-    except Exception as e:
-        print("[ERROR] get_events_for_competition:", e)
-        return {"error": str(e)}
+    url = f"{BASE_URLS['v0']}/events/{event_key}/markets"
+    data = safe_request(url)
 
-
-def get_events_by_keys(event_keys: list):
-    """
-    Get detailed info for specific eventKeys
-    Example endpoint:
-    /v0/events?eventKeys=["abc123","def456"]&returnType=array
-    """
-    if not event_keys:
-        return {"events": []}
-
-    url = f"{BASE_URL}/events"
-    params = {"eventKeys": event_keys, "returnType": "array"}
-    print("[DEBUG] GET", url, params)
-    try:
-        resp = requests.get(url, headers=HEADERS, params=params, timeout=10)
-        print("[DEBUG] Status:", resp.status_code)
-        if resp.status_code == 200:
-            return resp.json()
-        else:
-            return {"error": f"HTTP {resp.status_code}", "text": resp.text}
-    except Exception as e:
-        print("[ERROR] get_events_by_keys:", e)
-        return {"error": str(e)}
-
-
-def get_markets(event_key: str):
-    """
-    Get all available markets (odds, props, etc.) for a given event.
-    Example endpoint:
-    /v0/events/{eventKey}/markets
-    """
-    url = f"{BASE_URL}/events/{event_key}/markets"
-    print("[DEBUG] GET", url)
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        print("[DEBUG] Status:", resp.status_code)
-        if resp.status_code == 200:
-            return resp.json()
-        else:
-            return {"error": f"HTTP {resp.status_code}", "text": resp.text}
-    except Exception as e:
-        print("[ERROR] get_markets:", e)
-        return {"error": str(e)}
-
-
-# ===========================
-# Optional Future Endpoints
-# ===========================
+    # Filter to only DraftKings and FanDuel
+    if isinstance(data, dict) and "markets" in data:
+        filtered = []
+        for market in data["markets"]:
+            books = [b for b in market.get("bookmakers", []) if b["key"].lower() in ["draftkings", "fanduel"]]
+            if books:
+                market["bookmakers"] = books
+                filtered.append(market)
+        data["markets"] = filtered
+    return data
 
 def get_market_outcomes(market_key: str):
-    """
-    Get all outcomes for a given market (optional).
-    Example endpoint:
-    /v0/markets/{marketKey}/outcomes
-    """
-    url = f"{BASE_URL}/markets/{market_key}/outcomes"
-    print("[DEBUG] GET", url)
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        if resp.status_code == 200:
-            return resp.json()
-        else:
-            return {"error": f"HTTP {resp.status_code}", "text": resp.text}
-    except Exception as e:
-        print("[ERROR] get_market_outcomes:", e)
-        return {"error": str(e)}
+    """Fetch outcome odds for a given market (usually v1)."""
+    url = f"{BASE_URLS['v1']}/markets/{market_key}/outcomes"
+    return safe_request(url)
 
-
-def get_participant_statistics(participant_key: str):
-    """
-    Retrieve player or team statistics (optional).
-    Example endpoint:
-    /v0/participants/{participantKey}/statistics
-    """
-    url = f"{BASE_URL}/participants/{participant_key}/statistics"
-    print("[DEBUG] GET", url)
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        if resp.status_code == 200:
-            return resp.json()
-        else:
-            return {"error": f"HTTP {resp.status_code}", "text": resp.text}
-    except Exception as e:
-        print("[ERROR] get_participant_statistics:", e)
-        return {"error": str(e)}
-
-
+# -------------------------------------------------------------
+# 3️⃣ Advantages / Insights
+# -------------------------------------------------------------
 def get_advantages():
-    """
-    Retrieve sportsbook's internal 'advantages' data (optional).
-    Example endpoint:
-    /v0/advantages
-    """
-    url = f"{BASE_URL}/advantages"
-    print("[DEBUG] GET", url)
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        if resp.status_code == 200:
-            return resp.json()
-        else:
-            return {"error": f"HTTP {resp.status_code}", "text": resp.text}
-    except Exception as e:
-        print("[ERROR] get_advantages:", e)
-        return {"error": str(e)}
+    """Fetch advantage insights (model edge, win prob, etc.)."""
+    url = f"{BASE_URLS['v1']}/advantages/"
+    return safe_request(url)
+
+# -------------------------------------------------------------
+# 4️⃣ Wrapper for multi-step debugging
+# -------------------------------------------------------------
+def test_all_endpoints(competition_key="Q63E-wddv-ddp4", sample_event=None):
+    """Test all key API routes for debugging and validation."""
+    results = {}
+
+    print("[DEBUG] Fetching competitions...")
+    results["competitions"] = get_competitions()
+
+    print(f"[DEBUG] Fetching events for {competition_key}...")
+    events_data = get_events(competition_key)
+    results["events"] = events_data
+
+    if sample_event:
+        print(f"[DEBUG] Fetching event details and markets for {sample_event}...")
+        results["event_details"] = get_event_details(sample_event)
+        results["markets"] = get_event_markets(sample_event)
+        results["advantages"] = get_advantages()
+
+    return results
+
+# -------------------------------------------------------------
+# 5️⃣ Main Debug Mode
+# -------------------------------------------------------------
+if __name__ == "__main__":
+    print("[DEBUG] Starting API self-test...")
+    test_data = test_all_endpoints()
+    print(json.dumps(test_data, indent=2))
