@@ -1,62 +1,65 @@
-# sports_agent.py
-import traceback
-from sportsbook_api import get_events, get_odds, get_props, get_advantages
+import datetime
+from sportsbook_api import (
+    get_events,
+    get_odds,
+    get_props,
+    get_advantages
+)
 
 def build_payload(
-    sport_key: str,
+    sport: str,
     allow_api: bool = True,
     include_props: bool = True,
-    include_advantages: bool = True,
+    include_adv: bool = True,
     max_games: int = 10
 ):
     """
-    Combine sportsbook API data into one clean payload.
+    Build the JSON payload with events, odds, props, and advantages.
+
+    Args:
+        sport (str): The sport key ("nfl", "nba", etc.)
+        allow_api (bool): Whether to call the API
+        include_props (bool): Whether to pull props
+        include_adv (bool): Whether to pull advantages
+        max_games (int): Max number of games for quick testing
     """
-    print(f"[DEBUG] build_payload -> sport={sport_key}, allow_api={allow_api}")
+    print(f"[DEBUG] build_payload -> sport={sport}, allow_api={allow_api}")
 
-    try:
-        if not allow_api:
-            return {"status": "stub", "events": [], "message": "API calls disabled"}
+    data = {
+        "sport": sport,
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "status": "success",
+        "events": [],
+        "odds": [],
+        "props": [],
+        "advantages": []
+    }
 
-        # Step 1: Get events
-        events_resp = get_events(sport_key)
-        events = events_resp.get("data", {}).get("events", [])
-        if not events:
-            print(f"[WARN] No events found for {sport_key}")
-            return {"status": "empty", "events": [], "source": events_resp.get("url")}
+    if not allow_api:
+        data["status"] = "stub"
+        return data
 
-        limited_events = events[:max_games]
-        results = []
+    # NFL competition key (can expand logic later)
+    competition_key = "Q63E-wddv-ddp4" if sport.lower() == "nfl" else None
 
-        # Step 2: Enrich each event
-        for e in limited_events:
-            event_id = e.get("key") or e.get("id")
-            enriched = {"event": e, "event_id": event_id}
+    # 1️⃣ Events
+    events = get_events(sport, competition_key)
+    data["events"] = events[:max_games] if events else []
 
-            # Odds
-            odds_resp = get_odds(event_id)
-            enriched["odds"] = odds_resp.get("data")
+    # 2️⃣ Odds
+    odds = get_odds(competition_key)
+    data["odds"] = odds
 
-            # Props (optional)
-            if include_props:
-                props_resp = get_props(event_id)
-                enriched["props"] = props_resp.get("data")
+    # 3️⃣ Props
+    if include_props:
+        props = get_props(competition_key)
+        data["props"] = props
 
-            # Advantages (optional)
-            if include_advantages:
-                adv_resp = get_advantages(event_id)
-                enriched["advantages"] = adv_resp.get("data")
+    # 4️⃣ Advantages
+    if include_adv:
+        adv = get_advantages(competition_key)
+        data["advantages"] = adv
 
-            results.append(enriched)
-
-        return {
-            "status": "success",
-            "sport": sport_key,
-            "event_count": len(results),
-            "events": results
-        }
-
-    except Exception:
-        print("[ERROR] Exception in build_payload:")
-        print(traceback.format_exc())
-        return {"status": "error", "trace": traceback.format_exc()}
+    data["event_count"] = len(data["events"])
+    print(f"[DEBUG] build_payload complete with {data['event_count']} events")
+    return data
