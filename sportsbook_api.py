@@ -1,64 +1,64 @@
-# sportsbook_api.py
 import os
 import requests
-import datetime
+from datetime import datetime, timedelta
 
-RAPIDAPI_HOST = os.getenv("SPORTSBOOK_RAPIDAPI_HOST", "sportsbook-api2.p.rapidapi.com")
-RAPIDAPI_KEY = os.getenv("SPORTSBOOK_RAPIDAPI_KEY")  # set in Render env
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
+RAPIDAPI_HOST = "sportsbook-api2.p.rapidapi.com"
 
-# Simple in-memory cache (resets each deploy)
-_odds_cache = {}
-_last_fetch = None
+HEADERS = {
+    "X-RapidAPI-Key": RAPIDAPI_KEY,
+    "X-RapidAPI-Host": RAPIDAPI_HOST
+}
 
-def _make_request(endpoint, params):
-    """Helper to make API request with debug logging."""
-    url = f"https://{RAPIDAPI_HOST}/{endpoint}"
-    headers = {
-        "X-RapidAPI-Host": RAPIDAPI_HOST,
-        "X-RapidAPI-Key": RAPIDAPI_KEY
+def get_events(sport, start=None, end=None, region="us"):
+    """Pull events for a given sport"""
+    url = f"https://{RAPIDAPI_HOST}/v1/events"
+    params = {
+        "sport": sport,
+        "region": region
     }
+    if start:
+        params["from"] = start
+    if end:
+        params["to"] = end
 
     try:
-        resp = requests.get(url, headers=headers, params=params, timeout=15)
+        resp = requests.get(url, headers=HEADERS, params=params)
+        resp.raise_for_status()
+        return resp.json().get("events", [])
+    except Exception as e:
+        print(f"[ERROR] get_events failed: {e}")
+        return []
 
-        # ✅ Debug logs to Render output
-        print(f"[DEBUG] Requesting: {url}")
-        print(f"[DEBUG] Params: {params}")
-        print(f"[DEBUG] Status: {resp.status_code}")
-        print(f"[DEBUG] Response text (first 500 chars): {resp.text[:500]}")
 
+def get_odds_for_event(event_id, region="us", markets="h2h,spreads,totals,player_props"):
+    """Pull odds/props for a single event by ID"""
+    url = f"https://{RAPIDAPI_HOST}/v1/odds/{event_id}"
+    params = {"region": region, "mkt": markets, "oddsFormat": "american"}
+
+    try:
+        resp = requests.get(url, headers=HEADERS, params=params)
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
-        print(f"[ERROR] {endpoint} failed:", e)
+        print(f"[ERROR] get_odds_for_event {event_id} failed: {e}")
         return {}
+    
 
-def get_odds(sport="nfl", days_ahead=7, force_refresh=False):
-    """
-    Fetch odds & props for a sport.
-    Uses simple once-per-day cache unless force_refresh=True.
-    """
-    global _odds_cache, _last_fetch
+def get_odds(sport, start=None, end=None, max_games=None):
+    """Main function to get odds for a sport — loops events → odds"""
+    events = get_events(sport, start, end)
+    results = []
 
-    today = datetime.date.today()
-    if not force_refresh and _last_fetch == today and sport in _odds_cache:
-        print(f"[DEBUG] Returning cached odds for {sport}")
-        return _odds_cache[sport]
+    for ev in events:
+        event_id = ev.get("id")
+        if not event_id:
+            continue
+        odds_data = get_odds_for_event(event_id)
+        if odds_data:
+            results.append(odds_data)
 
-    # Build time window
-    start = datetime.datetime.utcnow().isoformat()
-    end = (datetime.datetime.utcnow() + datetime.timedelta(days=days_ahead)).isoformat()
+        if max_games and len(results) >= max_games:
+            break
 
-    # 🔑 Odds endpoint (first test here)
-    params = {
-        "sport": sport,
-        "region": "us",
-        "mkt": "h2h,spreads,totals,player_props",
-        "oddsFormat": "american"
-    }
-    data = _make_request("odds", params)
-
-    # Save to cache
-    _odds_cache[sport] = data
-    _last_fetch = today
-    return data
+    return results
