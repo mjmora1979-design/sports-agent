@@ -1,7 +1,9 @@
 from flask import Flask, request, jsonify
-from sports_agent import build_payload, to_excel
+from sports_agent import build_payload
 import requests
 import os
+import io
+from openpyxl import Workbook
 
 app = Flask(__name__)
 
@@ -171,7 +173,6 @@ def run():
         payload = build_payload(
             sport,
             allow_api=allow_api,
-            game_filter=game_filter,
             max_games=max_games
         )
         return jsonify(payload)
@@ -186,11 +187,27 @@ def excel():
         payload = build_payload(
             body.get("sport", "nfl"),
             allow_api=body.get("allow_api", False),
-            game_filter=body.get("game_filter"),
             max_games=body.get("max_games")
         )
-        excel_bytes = to_excel(payload)
-        return excel_bytes, 200, {
+        
+        # Create Excel file from payload
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Sports Data"
+        
+        # Write games
+        if payload.get('games'):
+            ws.append(['Games'])
+            ws.append(list(payload['games'][0].keys()) if payload['games'] else [])
+            for game in payload['games']:
+                ws.append(list(game.values()))
+        
+        # Save to bytes
+        excel_buffer = io.BytesIO()
+        wb.save(excel_buffer)
+        excel_buffer.seek(0)
+        
+        return excel_buffer.getvalue(), 200, {
             "Content-Disposition": "attachment; filename=output.xlsx",
             "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         }
