@@ -1,73 +1,64 @@
-import os, requests, datetime, json, hashlib
+# sportsbook_api.py
+import os
+import requests
+import datetime
 
 RAPIDAPI_HOST = os.getenv("SPORTSBOOK_RAPIDAPI_HOST", "sportsbook-api2.p.rapidapi.com")
-RAPIDAPI_KEY = os.getenv("SPORTSBOOK_RAPIDAPI_KEY")
+RAPIDAPI_KEY = os.getenv("SPORTSBOOK_RAPIDAPI_KEY")  # set in Render env
 
-BASE_URL = f"https://{RAPIDAPI_HOST}"
-CACHE_TTL_SEC = int(os.getenv("CACHE_TTL_SEC", "7200"))  # default 2 hours
-CACHE_DIR = "/tmp/sports_cache"
+# Simple in-memory cache (resets each deploy)
+_odds_cache = {}
+_last_fetch = None
 
-if not os.path.exists(CACHE_DIR):
-    os.makedirs(CACHE_DIR)
-
-def get_headers():
-    return {
+def _make_request(endpoint, params):
+    """Helper to make API request with debug logging."""
+    url = f"https://{RAPIDAPI_HOST}/{endpoint}"
+    headers = {
         "X-RapidAPI-Host": RAPIDAPI_HOST,
         "X-RapidAPI-Key": RAPIDAPI_KEY
     }
 
-def _cache_path(key: str) -> str:
-    hashed = hashlib.md5(key.encode()).hexdigest()
-    return os.path.join(CACHE_DIR, f"{hashed}.json")
-
-def _read_cache(key: str):
-    path = _cache_path(key)
-    if not os.path.exists(path):
-        return None
     try:
-        with open(path, "r") as f:
-            cached = json.load(f)
-        if datetime.datetime.utcnow().timestamp() - cached["timestamp"] < CACHE_TTL_SEC:
-            return cached["data"]
-    except Exception:
-        return None
-    return None
+        resp = requests.get(url, headers=headers, params=params, timeout=15)
 
-def _write_cache(key: str, data):
-    path = _cache_path(key)
-    try:
-        with open(path, "w") as f:
-            json.dump({"timestamp": datetime.datetime.utcnow().timestamp(), "data": data}, f)
+        # ✅ Debug logs to Render output
+        print(f"[DEBUG] Requesting: {url}")
+        print(f"[DEBUG] Params: {params}")
+        print(f"[DEBUG] Status: {resp.status_code}")
+        print(f"[DEBUG] Response text (first 500 chars): {resp.text[:500]}")
+
+        resp.raise_for_status()
+        return resp.json()
     except Exception as e:
-        print(f"[WARN] Cache write failed: {e}")
+        print(f"[ERROR] {endpoint} failed:", e)
+        return {}
 
-def get_odds(sport, from_date=None, to_date=None, force_direct=False):
+def get_odds(sport="nfl", days_ahead=7, force_refresh=False):
     """
-    Pull odds with cache.
-    Only 1 API hit per sport/day unless force_direct=True bypasses cache.
+    Fetch odds & props for a sport.
+    Uses simple once-per-day cache unless force_refresh=True.
     """
-    cache_key = f"odds:{sport}:{datetime.date.today().isoformat()}"
-    if not force_direct:
-        cached = _read_cache(cache_key)
-        if cached:
-            print(f"[CACHE] Using cached odds for {sport}")
-            return cached
+    global _odds_cache, _last_fetch
 
-    url = f"{BASE_URL}/odds"
+    today = datetime.date.today()
+    if not force_refresh and _last_fetch == today and sport in _odds_cache:
+        print(f"[DEBUG] Returning cached odds for {sport}")
+        return _odds_cache[sport]
+
+    # Build time window
+    start = datetime.datetime.utcnow().isoformat()
+    end = (datetime.datetime.utcnow() + datetime.timedelta(days=days_ahead)).isoformat()
+
+    # 🔑 Odds endpoint (first test here)
     params = {
         "sport": sport,
         "region": "us",
         "mkt": "h2h,spreads,totals,player_props",
         "oddsFormat": "american"
     }
+    data = _make_request("odds", params)
 
-    try:
-        print(f"[DEBUG] Requesting odds from {url} (force_direct={force_direct})")
-        resp = requests.get(url, headers=get_headers(), params=params, timeout=20)
-        resp.raise_for_status()
-        events = resp.json().get("events", [])
-        _write_cache(cache_key, events)
-        return events
-    except Exception as e:
-        print(f"[ERROR] get_odds: {e}")
-        return []
+    # Save to cache
+    _odds_cache[sport] = data
+    _last_fetch = today
+    return data
