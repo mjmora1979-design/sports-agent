@@ -1,66 +1,55 @@
 import datetime
 from sportsbook_api import get_events, get_odds
 
-def build_payload(
-    sport: str,
-    allow_api: bool = True,
-    max_games: int = 10
-):
-    """
-    Build the JSON payload with games and odds.
-    
-    Args:
-        sport (str): The sport key ("nfl", "nba", "ncaaf", etc.)
-        allow_api (bool): Whether to call the API (True) or return stub.
-        max_games (int): Limit number of games returned (for testing).
-    """
-    print(f"[DEBUG] build_payload called with sport={sport}, allow_api={allow_api}, max_games={max_games}")
+_cache = {}
 
-    games, odds = [], []
+def _cached(key):
+    val = _cache.get(key)
+    if val and (datetime.datetime.utcnow() - val["ts"]).seconds < 900:
+        print(f"[DEBUG] Using cached data for {key}")
+        return val["data"]
 
-    if allow_api:
-        # Events (games)
-        events_resp = get_events(sport)
-        games = events_resp.get("events", [])
-        print(f"[DEBUG] Retrieved {len(games)} events")
+def _store(key, data):
+    _cache[key] = {"ts": datetime.datetime.utcnow(), "data": data}
 
-        # Odds
-        odds_resp = get_odds(sport)
-        odds = odds_resp.get("odds", [])
-        print(f"[DEBUG] Retrieved {len(odds)} odds entries")
-
-        # Trim if max_games is set
-        if games and max_games:
-            games = games[:max_games]
-            print(f"[DEBUG] Trimmed games to {len(games)} entries (max_games={max_games})")
-        if odds and max_games:
-            odds = odds[:max_games]
-            print(f"[DEBUG] Trimmed odds to {len(odds)} entries (max_games={max_games})")
-
-    # Survivor mode (NFL only)
-    survivor = {
-        "used": [],
-        "week": get_week(sport) if sport == "nfl" else None
-    }
-
-    return {
-        "games": games,
-        "odds": odds,
-        "status": "success",
-        "survivor": survivor,
-        "week": survivor.get("week")
-    }
-
-def get_week(sport: str) -> int:
-    """Derive the current week number for NFL or fallback to calendar week."""
+def get_week(sport: str):
     if sport != "nfl":
         return None
-    try:
-        # Rough fallback: ISO calendar week
-        today = datetime.date.today()
-        week_num = today.isocalendar()[1]
-        print(f"[DEBUG] Fallback NFL week = {week_num}")
-        return week_num
-    except Exception as e:
-        print(f"[ERROR] get_week failed: {e}")
-        return 0
+    today = datetime.date.today()
+    week_num = today.isocalendar()[1] - 35
+    return max(1, min(18, week_num))
+
+def build_payload(sport: str, allow_api: bool = True, max_games: int = 10):
+    print(f"[DEBUG] build_payload called with sport={sport}, allow_api={allow_api}")
+    cache_key = f"{sport}_{allow_api}_{max_games}"
+    cached = _cached(cache_key)
+    if cached:
+        return cached
+
+    games, odds = [], []
+    if allow_api:
+        events_resp = get_events(sport)
+        if events_resp.get("status") == "success":
+            games = events_resp.get("data", [])[:max_games]
+
+        odds_resp = get_odds(sport)
+        if odds_resp.get("status") == "success":
+            odds = odds_resp.get("data", [])[:max_games]
+
+    survivor = {"used": [], "week": get_week(sport) if sport == "nfl" else None}
+
+    payload = {
+        "status": "success" if games or odds else "error",
+        "source": "sports-agent",
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "sport": sport,
+        "summary": {
+            "games_count": len(games),
+            "odds_count": len(odds),
+            "week": survivor.get("week"),
+        },
+        "data": {"games": games, "odds": odds, "survivor": survivor},
+    }
+
+    _store(cache_key, payload)
+    return payload
