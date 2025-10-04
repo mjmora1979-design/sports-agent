@@ -2,40 +2,66 @@ import os
 import requests
 import datetime
 
-# Pull environment variables
-API_HOST = os.environ.get("SPORTSBOOK_RAPIDAPI_HOST")
-API_KEY = os.environ.get("SPORTSBOOK_RAPIDAPI_KEY")
+# Pull environment variables - FIXED NAMES
+API_HOST = os.environ.get("RAPIDAPI_HOST", "sportsbook-api2.p.rapidapi.com")
+API_KEY = os.environ.get("RAPIDAPI_KEY")
 
-# Headers for RapidAPI
+# Headers for RapidAPI - FIXED CAPITALIZATION
 HEADERS = {
-    "x-rapidapi-host": API_HOST,
-    "x-rapidapi-key": API_KEY,
+    "X-RapidAPI-Host": API_HOST,
+    "X-RapidAPI-Key": API_KEY,
     "accept": "application/json"
 }
 
 def _debug_headers():
     """Print key debug info without exposing full secrets."""
-    print(f"[DEBUG] Host = {HEADERS.get('x-rapidapi-host')}")
-    print(f"[DEBUG] API key present? {bool(HEADERS.get('x-rapidapi-key'))}")
+    print(f"[DEBUG] Host = {HEADERS.get('X-RapidAPI-Host')}")
+    print(f"[DEBUG] API key present? {bool(HEADERS.get('X-RapidAPI-Key'))}")
+    if API_KEY:
+        print(f"[DEBUG] API key preview: {API_KEY[:10]}...")
 
 def get_events(sport: str, region: str = "us", days: int = 7):
     """Fetch events (games) for a sport."""
     _debug_headers()
     try:
-        now = datetime.datetime.utcnow()
-        end = now + datetime.timedelta(days=days)
-        params = {
-            "sport": sport,
-            "region": region,
-            "from": now.isoformat(),
-            "to": end.isoformat()
+        # Map common sport names to API format
+        sport_map = {
+            "nfl": "americanfootball_nfl",
+            "ncaaf": "americanfootball_ncaaf",
+            "nba": "basketball_nba",
+            "ncaab": "basketball_ncaab",
+            "mlb": "baseball_mlb",
+            "nhl": "icehockey_nhl"
         }
-        url = f"https://{API_HOST}/v1/events"
+        
+        api_sport = sport_map.get(sport.lower(), sport)
+        
+        # FIXED: Changed to /v0/events/ (with trailing slash)
+        url = f"https://{API_HOST}/v0/events/"
+        
+        # Simplified params - just sport for now
+        params = {
+            "sport": api_sport
+        }
+        
         print(f"[DEBUG] Requesting events from: {url}")
         print(f"[DEBUG] Params: {params}")
+        
         res = requests.get(url, headers=HEADERS, params=params, timeout=15)
+        
+        print(f"[DEBUG] Response status: {res.status_code}")
+        
         res.raise_for_status()
-        return res.json()
+        data = res.json()
+        
+        print(f"[DEBUG] Response keys: {list(data.keys()) if isinstance(data, dict) else 'array'}")
+        
+        return data
+        
+    except requests.exceptions.HTTPError as e:
+        print(f"[ERROR] HTTP Error in get_events: {e}")
+        print(f"[ERROR] Response text: {e.response.text[:300]}")
+        return {"events": []}
     except Exception as e:
         print(f"[ERROR] get_events failed: {e}")
         return {"events": []}
@@ -44,18 +70,46 @@ def get_odds(sport: str, region: str = "us", markets: str = "h2h,spreads,totals,
     """Fetch odds for a sport."""
     _debug_headers()
     try:
+        # Map common sport names to API format
+        sport_map = {
+            "nfl": "americanfootball_nfl",
+            "ncaaf": "americanfootball_ncaaf",
+            "nba": "basketball_nba",
+            "ncaab": "basketball_ncaab",
+            "mlb": "baseball_mlb",
+            "nhl": "icehockey_nhl"
+        }
+        
+        api_sport = sport_map.get(sport.lower(), sport)
+        
+        # FIXED: Changed to /v0/odds/ (assuming same pattern as events)
+        # We'll verify this with the test endpoint
+        url = f"https://{API_HOST}/v0/odds/"
+        
         params = {
-            "sport": sport,
-            "region": region,
-            "mkt": markets,
+            "sport": api_sport,
+            "markets": markets,
             "oddsFormat": "american"
         }
-        url = f"https://{API_HOST}/v1/odds"
+        
         print(f"[DEBUG] Requesting odds from: {url}")
         print(f"[DEBUG] Params: {params}")
+        
         res = requests.get(url, headers=HEADERS, params=params, timeout=15)
+        
+        print(f"[DEBUG] Response status: {res.status_code}")
+        
         res.raise_for_status()
-        return res.json()
+        data = res.json()
+        
+        print(f"[DEBUG] Response keys: {list(data.keys()) if isinstance(data, dict) else 'array'}")
+        
+        return data
+        
+    except requests.exceptions.HTTPError as e:
+        print(f"[ERROR] HTTP Error in get_odds: {e}")
+        print(f"[ERROR] Response text: {e.response.text[:300]}")
+        return {"odds": []}
     except Exception as e:
         print(f"[ERROR] get_odds failed: {e}")
         return {"odds": []}
