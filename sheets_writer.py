@@ -26,7 +26,7 @@ def log_to_sheets(sheet_name, rows):
 
     if rows:
         header = list(rows[0].keys())
-        if not ws.get_all_values():
+        if not ws.get_all_values():  # add header if sheet is empty
             ws.append_row(header)
         for row in rows:
             ws.append_row([row.get(col, "") for col in header])
