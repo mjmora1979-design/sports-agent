@@ -7,6 +7,7 @@ from sheets_writer import log_to_sheets
 # -------------------------
 # Week detection (NFL/NCAAF)
 # -------------------------
+
 def get_current_football_week():
     """Get NFL/NCAAF current week from nfl_data_py schedules."""
     try:
@@ -25,6 +26,7 @@ def get_current_football_week():
 # -------------------------
 # Helpers
 # -------------------------
+
 def summarize_best_prices(game):
     """Return neutral summary with best ML/spread/total/props across books."""
     summary = {
@@ -33,7 +35,6 @@ def summarize_best_prices(game):
         "best_total": {},
         "best_props": {}
     }
-
     books = game.get("books", {})
 
     # --- Moneyline
@@ -80,13 +81,13 @@ def summarize_best_prices(game):
                                 "point": line.get("point"),
                                 "price": line.get("price")
                             }
-
     return summary
 
 # -------------------------
 # Payload builder
 # -------------------------
-def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
+
+def build_payload(sport, allow_api=False, mode="all", game_filter=None, max_games=None):
     """Main odds + props payload builder."""
     week = None
     if sport in ["nfl", "ncaaf"]:
@@ -99,12 +100,9 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
     rows_for_sheets = []
 
     if allow_api:
-        # ✅ Step 1: Get events
-        events = get_events(sport, start, end)
-        event_ids = [ev.get("id") for ev in events]
-
-        # ✅ Step 2: Get odds + props for those events
-        odds = get_odds(sport, event_ids)
+        events = get_events(sport, start, end, max_games=max_games)
+        event_ids = [ev.get("id") for ev in events if ev.get("id")]
+        odds = get_odds(sport, event_ids, mode=mode)
 
         for ev in odds:
             home = ev.get("home_team")
@@ -121,7 +119,7 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
                     "h2h": data.get("h2h", {}),
                     "spreads": data.get("spreads", []),
                     "totals": data.get("totals", {}),
-                    "props": data.get("props", {})
+                    "props": data.get("props", {}) if mode == "open" else {}
                 }
 
             game = {
@@ -135,7 +133,6 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
 
             # Flatten for sheets logging
             for book, data in books.items():
-                # moneylines
                 for team, price in data.get("h2h", {}).items():
                     rows_for_sheets.append({
                         "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
@@ -149,7 +146,6 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
                         "price": price,
                         "point_or_line": ""
                     })
-                # spreads
                 for spread in data.get("spreads", []):
                     rows_for_sheets.append({
                         "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
@@ -163,7 +159,6 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
                         "price": spread.get("price"),
                         "point_or_line": spread.get("point")
                     })
-                # totals
                 for side, val in data.get("totals", {}).items():
                     rows_for_sheets.append({
                         "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
@@ -177,41 +172,37 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
                         "price": val.get("price"),
                         "point_or_line": val.get("point")
                     })
-                # props
-                for prop_name, players in data.get("props", {}).items():
-                    for player, lines in players.items():
-                        for side, line in lines.items():
-                            rows_for_sheets.append({
-                                "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
-                                "event_id": event_id,
-                                "commence_time": commence,
-                                "home": home,
-                                "away": away,
-                                "book": book,
-                                "market": prop_name,
-                                "label": f"{player} {side}",
-                                "price": line.get("price"),
-                                "point_or_line": line.get("point")
-                            })
+                if mode == "open":  # props only at open
+                    for prop_name, players in data.get("props", {}).items():
+                        for player, lines in players.items():
+                            for side, line in lines.items():
+                                rows_for_sheets.append({
+                                    "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
+                                    "event_id": event_id,
+                                    "commence_time": commence,
+                                    "home": home,
+                                    "away": away,
+                                    "book": book,
+                                    "market": prop_name,
+                                    "label": f"{player} {side}",
+                                    "price": line.get("price"),
+                                    "point_or_line": line.get("point")
+                                })
 
-    # ✅ Write to Sheets if enabled
     if rows_for_sheets:
         log_to_sheets(sport, rows_for_sheets)
 
-    payload = {
+    return {
         "status": "success",
         "week": week,
         "games": games,
-        "survivor": {
-            "used": [],
-            "week": week
-        }
+        "survivor": {"used": [], "week": week}
     }
-    return payload
 
 # -------------------------
-# Excel Export
+# Excel Export (optional)
 # -------------------------
+
 def to_excel(payload):
     """Return Excel bytes from payload."""
     games = payload.get("games", [])
