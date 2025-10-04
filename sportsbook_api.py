@@ -1,55 +1,33 @@
-# sportsbook_api.py
-import os
-import requests
-import datetime
+import os, requests, datetime
 
-# ------------------------------------------------
-# Config
-# ------------------------------------------------
 RAPIDAPI_HOST = os.getenv("SPORTSBOOK_RAPIDAPI_HOST", "sportsbook-api2.p.rapidapi.com")
 RAPIDAPI_KEY = os.getenv("SPORTSBOOK_RAPIDAPI_KEY")
 
-HEADERS = {
-    "X-RapidAPI-Host": RAPIDAPI_HOST,
-    "X-RapidAPI-Key": RAPIDAPI_KEY
-}
+BASE_URL = f"https://{RAPIDAPI_HOST}"
 
-# ------------------------------------------------
-# Fetch odds directly (no /events anymore)
-# ------------------------------------------------
-def get_odds(sport: str, days: int = 7, markets=None):
+def get_headers():
+    return {
+        "X-RapidAPI-Host": RAPIDAPI_HOST,
+        "X-RapidAPI-Key": RAPIDAPI_KEY
+    }
+
+def get_odds(sport, from_date=None, to_date=None, force_direct=False):
     """
-    Pull odds (moneyline, spreads, totals, props) for given sport.
-    Defaults to 7 days ahead. Removes /events call.
+    Pull odds either directly (/odds) or with events+odds if available.
     """
-    if markets is None:
-        markets = ["h2h", "spreads", "totals", "player_props"]
-
-    base_url = f"https://{RAPIDAPI_HOST}/odds"
-
-    start = datetime.datetime.utcnow()
-    end = start + datetime.timedelta(days=days)
-
+    url = f"{BASE_URL}/odds"
     params = {
         "sport": sport,
         "region": "us",
-        "mkt": ",".join(markets),
+        "mkt": "h2h,spreads,totals,player_props",
         "oddsFormat": "american"
-        # ❌ removed from/to because not supported by odds endpoint
     }
 
     try:
-        print(f"[DEBUG] Requesting odds from: {base_url}")
-        print(f"[DEBUG] Params: {params}")
-
-        resp = requests.get(base_url, headers=HEADERS, params=params, timeout=15)
+        print(f"[DEBUG] Requesting odds from {url} (force_direct={force_direct})")
+        resp = requests.get(url, headers=get_headers(), params=params, timeout=20)
         resp.raise_for_status()
-
-        data = resp.json()
-        print(f"[DEBUG] Odds response keys: {list(data.keys())}")
-
-        # Return as-is for sports_agent.py to process
-        return data.get("events", []) or data.get("games", []) or []
+        return resp.json().get("events", [])
     except Exception as e:
-        print(f"[ERROR] get_odds failed: {e}")
+        print(f"[ERROR] get_odds: {e}")
         return []
