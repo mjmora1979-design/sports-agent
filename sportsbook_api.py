@@ -1,95 +1,170 @@
-import datetime
-from sportsbook_api import (
-    list_competitions,
-    get_events_for_competition,
-    get_events_by_keys,
-    get_markets,
-)
+import os
+import requests
 
-# Books we actually care about
-SUPPORTED_BOOKS = {"draftkings", "fanduel"}
+# ===========================
+# Configuration
+# ===========================
+
+BASE_URL = "https://sportsbook-api2.p.rapidapi.com/v0"
+RAPIDAPI_HOST = "sportsbook-api2.p.rapidapi.com"
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY") or os.getenv("SPORTSBOOK_RAPIDAPI_KEY")
+
+HEADERS = {
+    "X-RapidAPI-Key": RAPIDAPI_KEY,
+    "X-RapidAPI-Host": RAPIDAPI_HOST
+}
 
 
-def find_competition_key(sport_hint: str):
+# ===========================
+# Core API Functions
+# ===========================
+
+def list_competitions():
     """
-    Scan all competitions and return the first one whose name or key matches sport_hint (e.g. 'nfl').
+    Get all available competitions (NFL, NBA, etc.)
+    Example endpoint: /v0/competitions
     """
-    competitions = list_competitions()
-    if isinstance(competitions, dict) and "error" in competitions:
-        return None
+    url = f"{BASE_URL}/competitions"
+    print("[DEBUG] GET", url)
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        print("[DEBUG] Status:", resp.status_code)
+        if resp.status_code == 200:
+            data = resp.json()
+            comps = data.get("competitions", [])
+            print(f"[DEBUG] Found {len(comps)} competitions")
+            return comps
+        else:
+            return {"error": f"HTTP {resp.status_code}", "text": resp.text}
+    except Exception as e:
+        print("[ERROR] list_competitions:", e)
+        return {"error": str(e)}
 
-    for comp in competitions:
-        name = (comp.get("name") or "").lower()
-        key = (comp.get("competitionKey") or "").lower()
-        if sport_hint.lower() in name or sport_hint.lower() in key:
-            return comp.get("competitionKey")
 
-    print(f"[WARN] No competitionKey found for {sport_hint}")
-    return None
-
-
-def build_payload(sport: str, allow_api: bool = True, max_games: int = 10):
+def get_events_for_competition(competition_key: str, event_type: str = "MATCH"):
     """
-    Build JSON payload with competitions, events, and odds.
+    Get all events under a competition (e.g. NFL games)
+    Example endpoint:
+    /v0/competitions/{competitionKey}/events?eventType=MATCH
     """
-    payload = {
-        "timestamp": datetime.datetime.utcnow().isoformat(),
-        "sport": sport,
-        "events": [],
-        "markets": [],
-    }
+    url = f"{BASE_URL}/competitions/{competition_key}/events"
+    params = {"eventType": event_type}
+    print("[DEBUG] GET", url, params)
+    try:
+        resp = requests.get(url, headers=HEADERS, params=params, timeout=10)
+        print("[DEBUG] Status:", resp.status_code)
+        if resp.status_code == 200:
+            data = resp.json()
+            events = data.get("events", [])
+            print(f"[DEBUG] Retrieved {len(events)} events")
+            return events
+        else:
+            return {"error": f"HTTP {resp.status_code}", "text": resp.text}
+    except Exception as e:
+        print("[ERROR] get_events_for_competition:", e)
+        return {"error": str(e)}
 
-    if not allow_api:
-        payload["note"] = "API disabled, stubbed data."
-        return payload
 
-    # 1️⃣ Find the right competition key (e.g. NFL)
-    comp_key = find_competition_key(sport)
-    if not comp_key:
-        payload["error"] = "Competition not found"
-        return payload
-    payload["competitionKey"] = comp_key
-
-    # 2️⃣ Pull all events for that competition
-    events = get_events_for_competition(comp_key, event_type="MATCH")
-    if isinstance(events, dict) and "error" in events:
-        payload["events_error"] = events
-        return payload
-
-    if len(events) > max_games:
-        events = events[:max_games]
-    payload["events_raw_count"] = len(events)
-
-    # Extract eventKeys
-    event_keys = [e.get("eventKey") for e in events if e.get("eventKey")]
+def get_events_by_keys(event_keys: list):
+    """
+    Get detailed info for specific eventKeys
+    Example endpoint:
+    /v0/events?eventKeys=["abc123","def456"]&returnType=array
+    """
     if not event_keys:
-        payload["error"] = "No eventKeys found"
-        return payload
+        return {"events": []}
 
-    # 3️⃣ Fetch details for those events
-    detailed_events = get_events_by_keys(event_keys)
-    payload["events"] = detailed_events.get("events", [])
+    url = f"{BASE_URL}/events"
+    params = {"eventKeys": event_keys, "returnType": "array"}
+    print("[DEBUG] GET", url, params)
+    try:
+        resp = requests.get(url, headers=HEADERS, params=params, timeout=10)
+        print("[DEBUG] Status:", resp.status_code)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            return {"error": f"HTTP {resp.status_code}", "text": resp.text}
+    except Exception as e:
+        print("[ERROR] get_events_by_keys:", e)
+        return {"error": str(e)}
 
-    # 4️⃣ For each event, fetch markets (odds + props)
-    combined_markets = []
-    for ev in payload["events"]:
-        ev_key = ev.get("eventKey")
-        if not ev_key:
-            continue
-        markets_resp = get_markets(ev_key)
-        markets = markets_resp.get("markets", []) if isinstance(markets_resp, dict) else []
-        # Filter to supported books only
-        filtered = []
-        for m in markets:
-            books = [b for b in m.get("books", []) if b.get("bookKey") in SUPPORTED_BOOKS]
-            if books:
-                m["books"] = books
-                filtered.append(m)
-        if filtered:
-            combined_markets.append({"eventKey": ev_key, "markets": filtered})
 
-    payload["markets"] = combined_markets
-    payload["markets_count"] = len(combined_markets)
-    payload["books"] = list(SUPPORTED_BOOKS)
+def get_markets(event_key: str):
+    """
+    Get all available markets (odds, props, etc.) for a given event.
+    Example endpoint:
+    /v0/events/{eventKey}/markets
+    """
+    url = f"{BASE_URL}/events/{event_key}/markets"
+    print("[DEBUG] GET", url)
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        print("[DEBUG] Status:", resp.status_code)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            return {"error": f"HTTP {resp.status_code}", "text": resp.text}
+    except Exception as e:
+        print("[ERROR] get_markets:", e)
+        return {"error": str(e)}
 
-    return payload
+
+# ===========================
+# Optional Future Endpoints
+# ===========================
+
+def get_market_outcomes(market_key: str):
+    """
+    Get all outcomes for a given market (optional).
+    Example endpoint:
+    /v0/markets/{marketKey}/outcomes
+    """
+    url = f"{BASE_URL}/markets/{market_key}/outcomes"
+    print("[DEBUG] GET", url)
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            return {"error": f"HTTP {resp.status_code}", "text": resp.text}
+    except Exception as e:
+        print("[ERROR] get_market_outcomes:", e)
+        return {"error": str(e)}
+
+
+def get_participant_statistics(participant_key: str):
+    """
+    Retrieve player or team statistics (optional).
+    Example endpoint:
+    /v0/participants/{participantKey}/statistics
+    """
+    url = f"{BASE_URL}/participants/{participant_key}/statistics"
+    print("[DEBUG] GET", url)
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            return {"error": f"HTTP {resp.status_code}", "text": resp.text}
+    except Exception as e:
+        print("[ERROR] get_participant_statistics:", e)
+        return {"error": str(e)}
+
+
+def get_advantages():
+    """
+    Retrieve sportsbook's internal 'advantages' data (optional).
+    Example endpoint:
+    /v0/advantages
+    """
+    url = f"{BASE_URL}/advantages"
+    print("[DEBUG] GET", url)
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            return {"error": f"HTTP {resp.status_code}", "text": resp.text}
+    except Exception as e:
+        print("[ERROR] get_advantages:", e)
+        return {"error": str(e)}
