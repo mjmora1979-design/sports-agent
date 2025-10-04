@@ -5,16 +5,10 @@ from sportsbook_api import get_odds
 from sheets_writer import log_to_sheets
 
 # -------------------------
-# Simple Daily Cache
-# -------------------------
-
-_daily_cache = {}  # { (sport, date): payload }
-
-# -------------------------
 # Week detection (NFL/NCAAF)
 # -------------------------
-
 def get_current_football_week():
+    """Get NFL/NCAAF current week from nfl_data_py schedules."""
     try:
         year = datetime.date.today().year
         schedule = nfl.import_schedules([year])
@@ -30,7 +24,6 @@ def get_current_football_week():
 # -------------------------
 # Helpers
 # -------------------------
-
 def summarize_best_prices(game):
     summary = {
         "best_moneyline_by_team": {},
@@ -87,43 +80,36 @@ def summarize_best_prices(game):
     return summary
 
 # -------------------------
-# Payload Builder w/ Cache
+# Payload builder
 # -------------------------
-
-def build_payload(
-    sport,
-    allow_api=False,
-    game_filter=None,
-    max_games=None,
-    force_refresh=False,
-    force_direct_odds=False
-):
+def build_payload(sport, allow_api=False, force_direct_odds=False, game_filter=None, max_games=None):
+    """Main odds + props payload builder."""
     week = None
     if sport in ["nfl", "ncaaf"]:
         week = get_current_football_week()
-
-    today_key = (sport, datetime.datetime.utcnow().strftime("%Y-%m-%d"))
-
-    # ✅ Return cache if available
-    if not force_refresh and today_key in _daily_cache:
-        print(f"[CACHE HIT] Returning cached odds for {sport} on {today_key[1]}")
-        return _daily_cache[today_key]
-
-    start = datetime.datetime.utcnow().isoformat()
-    end = (datetime.datetime.utcnow() + datetime.timedelta(days=7)).isoformat()
 
     games = []
     rows_for_sheets = []
 
     if allow_api:
-        odds = get_odds(sport, start=start, end=end, force_direct=force_direct_odds)
+        odds = get_odds(sport, force_direct=force_direct_odds)
         for ev in odds:
             home = ev.get("home_team")
             away = ev.get("away_team")
             event_id = ev.get("id")
             commence = ev.get("commence_time")
 
-            books = ev.get("books", {})
+            books = {}
+            for book, data in ev.get("books", {}).items():
+                book_name = "DraftKings" if "draftkings" in book.lower() else \
+                            "FanDuel" if "fanduel" in book.lower() else book
+                books[book_name] = {
+                    "h2h": data.get("h2h", {}),
+                    "spreads": data.get("spreads", []),
+                    "totals": data.get("totals", {}),
+                    "props": data.get("props", {})
+                }
+
             game = {
                 "home_team": home,
                 "away_team": away,
@@ -133,8 +119,9 @@ def build_payload(
             }
             games.append(game)
 
-            # Sheets logging
+            # Flatten for sheets logging
             for book, data in books.items():
+                # moneylines
                 for team, price in data.get("h2h", {}).items():
                     rows_for_sheets.append({
                         "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
@@ -148,6 +135,7 @@ def build_payload(
                         "price": price,
                         "point_or_line": ""
                     })
+                # spreads
                 for spread in data.get("spreads", []):
                     rows_for_sheets.append({
                         "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
@@ -161,6 +149,7 @@ def build_payload(
                         "price": spread.get("price"),
                         "point_or_line": spread.get("point")
                     })
+                # totals
                 for side, val in data.get("totals", {}).items():
                     rows_for_sheets.append({
                         "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
@@ -174,6 +163,7 @@ def build_payload(
                         "price": val.get("price"),
                         "point_or_line": val.get("point")
                     })
+                # props
                 for prop_name, players in data.get("props", {}).items():
                     for player, lines in players.items():
                         for side, line in lines.items():
@@ -202,17 +192,11 @@ def build_payload(
             "week": week
         }
     }
-
-    # ✅ Save to cache
-    _daily_cache[today_key] = payload
-    print(f"[CACHE STORE] Saved odds for {sport} on {today_key[1]}")
-
     return payload
 
 # -------------------------
 # Excel Export
 # -------------------------
-
 def to_excel(payload):
     games = payload.get("games", [])
     df = pd.DataFrame(games)
