@@ -1,89 +1,70 @@
 import os
 import requests
 import datetime
-from functools import lru_cache
 
-# -------------------------
-# Config
-# -------------------------
 RAPIDAPI_HOST = os.getenv("SPORTSBOOK_RAPIDAPI_HOST", "sportsbook-api2.p.rapidapi.com")
 RAPIDAPI_KEY = os.getenv("SPORTSBOOK_RAPIDAPI_KEY")
 
-BASE_URL = f"https://{RAPIDAPI_HOST}"
+# Supported sports for safety
+SUPPORTED_SPORTS = ["nfl", "ncaaf", "nba", "mlb", "nhl"]
 
-HEADERS = {
-    "X-RapidAPI-Host": RAPIDAPI_HOST,
-    "X-RapidAPI-Key": RAPIDAPI_KEY
-}
+def _headers():
+    if not RAPIDAPI_KEY:
+        print("[WARN] No RAPIDAPI_KEY in env, requests may fail.")
+    return {
+        "X-RapidAPI-Host": RAPIDAPI_HOST,
+        "X-RapidAPI-Key": RAPIDAPI_KEY or ""
+    }
 
-CACHE_TTL = int(os.getenv("CACHE_TTL_SEC", "7200"))  # default 2 hours
+def get_events(sport, start=None, end=None, max_games=None):
+    """Fetch events (games) for given sport."""
+    if sport not in SUPPORTED_SPORTS:
+        raise ValueError(f"Unsupported sport: {sport}")
 
+    url = f"https://{RAPIDAPI_HOST}/events"
+    params = {"sport": sport, "region": "us"}
+    if start and end:
+        params["from"] = start
+        params["to"] = end
 
-# -------------------------
-# API Calls
-# -------------------------
-
-@lru_cache(maxsize=32)
-def get_events(sport: str):
-    """
-    Get events (games) for a given sport.
-    Example endpoint: /events/nfl
-    """
-    url = f"{BASE_URL}/events/{sport}"
-    print(f"[DEBUG] GET {url}")
-    resp = requests.get(url, headers=HEADERS)
-    resp.raise_for_status()
-    return resp.json().get("events", [])
-
-
-@lru_cache(maxsize=128)
-def get_markets(event_id: str):
-    """
-    Get all markets for a specific event.
-    Example endpoint: /markets/{event_id}
-    """
-    url = f"{BASE_URL}/markets/{event_id}"
-    print(f"[DEBUG] GET {url}")
-    resp = requests.get(url, headers=HEADERS)
-    resp.raise_for_status()
-    return resp.json().get("markets", {})
-
-
-def get_odds(sport: str, max_games: int = None):
-    """
-    Get odds + props for all events in a sport.
-    """
     try:
-        events = get_events(sport)
+        resp = requests.get(url, headers=_headers(), params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        events = data.get("events", [])
+        if max_games:
+            events = events[:max_games]
+        return events
     except Exception as e:
-        print(f"[ERROR] get_events failed: {e}")
+        print("[ERROR] get_events:", e)
         return []
 
-    games = []
-    count = 0
+def get_odds(sport, event_ids=None, mode="all"):
+    """
+    Fetch odds for sport or specific event IDs.
+    mode = "open" (first snapshot), "close" (final snapshot), "all" (default).
+    """
+    if sport not in SUPPORTED_SPORTS:
+        raise ValueError(f"Unsupported sport: {sport}")
 
-    for ev in events:
-        if max_games and count >= max_games:
-            break
+    url = f"https://{RAPIDAPI_HOST}/odds"
+    params = {
+        "sport": sport,
+        "region": "us",
+        "mkt": "h2h,spreads,totals,player_props",
+        "oddsFormat": "american"
+    }
+    if event_ids:
+        params["eventIds"] = ",".join(event_ids)
+    if mode in ["open", "close"]:
+        params["state"] = mode
 
-        event_id = ev.get("id")
-        home = ev.get("home_team")
-        away = ev.get("away_team")
-        commence = ev.get("commence_time")
+    try:
+        resp = requests.get(url, headers=_headers(), params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("events", [])
+    except Exception as e:
+        print("[ERROR] get_odds:", e)
+        return []
 
-        try:
-            markets = get_markets(event_id)
-        except Exception as e:
-            print(f"[ERROR] get_markets failed for {event_id}: {e}")
-            continue
-
-        games.append({
-            "id": event_id,
-            "home_team": home,
-            "away_team": away,
-            "commence_time": commence,
-            "books": markets  # Already structured by API
-        })
-        count += 1
-
-    return games
