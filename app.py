@@ -10,7 +10,33 @@ app = Flask(__name__)
 def home():
     return jsonify({
         "status": "running",
-        "timestamp": datetime.datetime.utcnow().isoformat()
+        "timestamp": datetime.datetime.utcnow().isoformat()from flask import Flask, request, jsonify
+from sports_agent import build_payload
+import os
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Sports Agent API is running."
+
+@app.route('/api/events', methods=['GET'])
+def get_events_endpoint():
+    """
+    Endpoint: /api/events?sport=nfl
+    """
+    sport = request.args.get('sport', 'nfl')
+    allow_api = request.args.get('allow_api', 'true').lower() == 'true'
+    max_games = int(request.args.get('max_games', 10))
+
+    payload = build_payload(sport=sport, allow_api=allow_api, max_games=max_games)
+    return jsonify(payload)
+
+if __name__ == '__main__':
+    # Bind to Render’s dynamic port, fallback to 10000 locally
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
+
     })
 
 
