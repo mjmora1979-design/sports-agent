@@ -1,64 +1,61 @@
 import os
 import requests
-from datetime import datetime, timedelta
+import datetime
 
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
-RAPIDAPI_HOST = "sportsbook-api2.p.rapidapi.com"
+# Pull environment variables
+API_HOST = os.environ.get("SPORTSBOOK_RAPIDAPI_HOST")
+API_KEY = os.environ.get("SPORTSBOOK_RAPIDAPI_KEY")
 
+# Headers for RapidAPI
 HEADERS = {
-    "X-RapidAPI-Key": RAPIDAPI_KEY,
-    "X-RapidAPI-Host": RAPIDAPI_HOST
+    "x-rapidapi-host": API_HOST,
+    "x-rapidapi-key": API_KEY,
+    "accept": "application/json"
 }
 
-def get_events(sport, start=None, end=None, region="us"):
-    """Pull events for a given sport"""
-    url = f"https://{RAPIDAPI_HOST}/v1/events"
-    params = {
-        "sport": sport,
-        "region": region
-    }
-    if start:
-        params["from"] = start
-    if end:
-        params["to"] = end
+def _debug_headers():
+    """Print key debug info without exposing full secrets."""
+    print(f"[DEBUG] Host = {HEADERS.get('x-rapidapi-host')}")
+    print(f"[DEBUG] API key present? {bool(HEADERS.get('x-rapidapi-key'))}")
 
+def get_events(sport: str, region: str = "us", days: int = 7):
+    """Fetch events (games) for a sport."""
+    _debug_headers()
     try:
-        resp = requests.get(url, headers=HEADERS, params=params)
-        resp.raise_for_status()
-        return resp.json().get("events", [])
+        now = datetime.datetime.utcnow()
+        end = now + datetime.timedelta(days=days)
+        params = {
+            "sport": sport,
+            "region": region,
+            "from": now.isoformat(),
+            "to": end.isoformat()
+        }
+        url = f"https://{API_HOST}/v1/events"
+        print(f"[DEBUG] Requesting events from: {url}")
+        print(f"[DEBUG] Params: {params}")
+        res = requests.get(url, headers=HEADERS, params=params, timeout=15)
+        res.raise_for_status()
+        return res.json()
     except Exception as e:
         print(f"[ERROR] get_events failed: {e}")
-        return []
+        return {"events": []}
 
-
-def get_odds_for_event(event_id, region="us", markets="h2h,spreads,totals,player_props"):
-    """Pull odds/props for a single event by ID"""
-    url = f"https://{RAPIDAPI_HOST}/v1/odds/{event_id}"
-    params = {"region": region, "mkt": markets, "oddsFormat": "american"}
-
+def get_odds(sport: str, region: str = "us", markets: str = "h2h,spreads,totals,player_props"):
+    """Fetch odds for a sport."""
+    _debug_headers()
     try:
-        resp = requests.get(url, headers=HEADERS, params=params)
-        resp.raise_for_status()
-        return resp.json()
+        params = {
+            "sport": sport,
+            "region": region,
+            "mkt": markets,
+            "oddsFormat": "american"
+        }
+        url = f"https://{API_HOST}/v1/odds"
+        print(f"[DEBUG] Requesting odds from: {url}")
+        print(f"[DEBUG] Params: {params}")
+        res = requests.get(url, headers=HEADERS, params=params, timeout=15)
+        res.raise_for_status()
+        return res.json()
     except Exception as e:
-        print(f"[ERROR] get_odds_for_event {event_id} failed: {e}")
-        return {}
-    
-
-def get_odds(sport, start=None, end=None, max_games=None):
-    """Main function to get odds for a sport — loops events → odds"""
-    events = get_events(sport, start, end)
-    results = []
-
-    for ev in events:
-        event_id = ev.get("id")
-        if not event_id:
-            continue
-        odds_data = get_odds_for_event(event_id)
-        if odds_data:
-            results.append(odds_data)
-
-        if max_games and len(results) >= max_games:
-            break
-
-    return results
+        print(f"[ERROR] get_odds failed: {e}")
+        return {"odds": []}
