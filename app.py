@@ -1,69 +1,71 @@
-import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from sports_agent import build_payload, to_excel
+import io, os
 
 app = Flask(__name__)
 
-# -------------------------
-# Healthcheck root
-# -------------------------
-@app.route("/", methods=["GET"])
+@app.route("/")
 def home():
-    return jsonify({"status": "ok", "message": "Sports Agent API is live"}), 200
+    return jsonify({"message": "Sports Agent API running"}), 200
 
-# -------------------------
-# Run payload builder
-# -------------------------
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+@app.route("/config", methods=["GET"])
+def config():
+    return jsonify({
+        "SPORTSBOOK_RAPIDAPI_HOST": os.getenv("SPORTSBOOK_RAPIDAPI_HOST", ""),
+        "SPORTSBOOK_RAPIDAPI_KEY_SET": "yes" if os.getenv("SPORTSBOOK_RAPIDAPI_KEY") else "no",
+        "BOOKS_DEFAULT": os.getenv("BOOKS_DEFAULT", ""),
+        "CACHE_TTL_SEC": os.getenv("CACHE_TTL_SEC", ""),
+        "SHEETS_ENABLED": os.getenv("SHEETS_ENABLED", "0"),
+        "GSHEET_ID": os.getenv("GSHEET_ID", ""),
+        "GOOGLE_CREDS_SET": "yes" if os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON") else "no"
+    }), 200
+
 @app.route("/run", methods=["POST"])
 def run():
-    try:
-        data = request.get_json(force=True)
+    body = request.get_json(force=True, silent=True) or {}
+    sport = (body.get("sport") or "nfl").lower()
+    allow_api = bool(body.get("allow_api", False)) and (request.headers.get("X-ALLOW-API", "") == "1")
+    game_filter = body.get("game_filter")
+    max_games = body.get("max_games")
+    force_direct_odds = bool(body.get("force_direct_odds", False))
 
-        sport = data.get("sport", "nfl")
-        allow_api = data.get("allow_api", True)
-        game_filter = data.get("game_filter")
-        max_games = data.get("max_games")
-        mode = data.get("mode", "open")   # ✅ new param to control open/closed odds
+    payload = build_payload(
+        sport,
+        allow_api=allow_api,
+        game_filter=game_filter,
+        max_games=max_games,
+        force_direct_odds=force_direct_odds
+    )
+    return jsonify(payload), 200
 
-        payload = build_payload(
-            sport,
-            allow_api=allow_api,
-            game_filter=game_filter,
-            max_games=max_games,
-            mode=mode
-        )
-        return jsonify(payload), 200
-    except Exception as e:
-        print("[ERROR] /run failed:", e)
-        return jsonify({"status": "error", "message": str(e)}), 500
+@app.route("/excel", methods=["POST"])
+def excel():
+    body = request.get_json(force=True, silent=True) or {}
+    sport = (body.get("sport") or "nfl").lower()
+    allow_api = bool(body.get("allow_api", False)) and (request.headers.get("X-ALLOW-API", "") == "1")
+    game_filter = body.get("game_filter")
+    max_games = body.get("max_games")
+    force_direct_odds = bool(body.get("force_direct_odds", False))
 
-# -------------------------
-# Excel export
-# -------------------------
-@app.route("/export", methods=["POST"])
-def export():
-    try:
-        data = request.get_json(force=True)
-        payload = build_payload(
-            data.get("sport", "nfl"),
-            allow_api=data.get("allow_api", True),
-            game_filter=data.get("game_filter"),
-            max_games=data.get("max_games"),
-            mode=data.get("mode", "open")
-        )
-        xlsx_bytes = to_excel(payload)
+    payload = build_payload(
+        sport,
+        allow_api=allow_api,
+        game_filter=game_filter,
+        max_games=max_games,
+        force_direct_odds=force_direct_odds
+    )
 
-        from flask import Response
-        response = Response(xlsx_bytes, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        response.headers.set("Content-Disposition", "attachment", filename="odds.xlsx")
-        return response
-    except Exception as e:
-        print("[ERROR] /export failed:", e)
-        return jsonify({"status": "error", "message": str(e)}), 500
+    xls = to_excel(payload)
+    return send_file(
+        io.BytesIO(xls),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=f"{sport}_odds.xlsx"
+    )
 
-# -------------------------
-# Main entrypoint
-# -------------------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
