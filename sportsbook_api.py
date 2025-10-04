@@ -1,74 +1,108 @@
-# sportsbook_api.py
 import os
 import requests
-import traceback
+import datetime
 
-# Load credentials from environment variables
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
+# RapidAPI Sportsbook API2 configuration
 RAPIDAPI_HOST = os.getenv("RAPIDAPI_HOST", "sportsbook-api2.p.rapidapi.com")
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "")
 
+# Default base paths to test
 BASE_URLS = [
     "https://sportsbook-api2.p.rapidapi.com/v0",
     "https://sportsbook-api2.p.rapidapi.com/v1",
     "https://sportsbook-api2.p.rapidapi.com/api/v1"
 ]
 
-HEADERS = {
-    "x-rapidapi-key": RAPIDAPI_KEY or "",
-    "x-rapidapi-host": RAPIDAPI_HOST
-}
 
-
-def _try_request(url, params=None):
-    """Try multiple base paths until one works."""
-    for base in BASE_URLS:
-        full_url = f"{base}/{url.lstrip('/')}"
-        try:
-            resp = requests.get(full_url, headers=HEADERS, params=params, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                count = len(data) if isinstance(data, list) else len(data.get("events", []))
-                print(f"[OK] {full_url} -> {count} results")
-                return {"url": full_url, "count": count, "data": data}
-            else:
-                print(f"[WARN] {full_url} returned {resp.status_code}")
-        except Exception:
-            print(f"[ERROR] {traceback.format_exc()}")
-    return {"url": None, "count": 0, "data": None}
-
-
-def get_events(sport_key: str):
-    """Fetch live or upcoming events for a sport."""
-    # Known competition mappings (for now just NFL, NCAAF, NBA)
-    competition_map = {
-        "nfl": "Q63E-wddv-ddp4",
-        "americanfootball_nfl": "Q63E-wddv-ddp4",
-        "ncaaf": "x32N-pdNq-V9vM",
-        "americanfootball_ncaaf": "x32N-pdNq-V9vM",
-        "nba": "xla2-r0r0-7ypu"
+def make_request(url: str, params: dict = None):
+    """Generic request handler with RapidAPI headers and error logging."""
+    headers = {
+        "x-rapidapi-host": RAPIDAPI_HOST,
+        "x-rapidapi-key": RAPIDAPI_KEY,
     }
 
-    comp_id = competition_map.get(sport_key.lower(), None)
-    if not comp_id:
-        return {"status": "error", "error": f"Unknown sport key {sport_key}"}
-
-    url = f"competitions/{comp_id}/events"
-    return _try_request(url, params={"eventType": "MATCH"})
-
-
-def get_odds(event_id: str):
-    """Fetch odds for a specific event."""
-    url = f"events/{event_id}/odds"
-    return _try_request(url)
+    try:
+        r = requests.get(url, headers=headers, params=params or {}, timeout=15)
+        if r.status_code == 200:
+            return r.json()
+        else:
+            print(f"[WARN] {url} returned {r.status_code}")
+            return {"status": r.status_code, "url": url}
+    except Exception as e:
+        print(f"[ERROR] Request failed: {url} -> {e}")
+        return {"error": str(e), "url": url}
 
 
-def get_props(event_id: str):
-    """Fetch player or team props for an event."""
-    url = f"events/{event_id}/props"
-    return _try_request(url)
+def get_competitions(sport_key: str):
+    """List competitions for a given sport."""
+    results = []
+    for base in BASE_URLS:
+        url = f"{base}/sports/{sport_key}/competitions"
+        resp = make_request(url)
+        if resp and isinstance(resp, dict):
+            results.append({
+                "base": base,
+                "status": resp.get("status", 200),
+                "competitions": resp.get("competitions", [])
+            })
+    return results
 
 
-def get_advantages(event_id: str):
-    """Fetch sportsbook ‘advantages’ (where lines differ) for an event."""
-    url = f"events/{event_id}/advantages"
-    return _try_request(url)
+def get_events(sport_key: str, competition_key: str = "Q63E-wddv-ddp4"):
+    """Return all events for a given competition."""
+    events = []
+    for base in BASE_URLS:
+        url = f"{base}/competitions/{competition_key}/events"
+        resp = make_request(url, params={"eventType": "MATCH"})
+        if resp and isinstance(resp, dict):
+            if "events" in resp:
+                print(f"[OK] {url} -> {len(resp['events'])} results")
+                events.extend(resp["events"])
+            else:
+                print(f"[WARN] {url} returned no events")
+    return events
+
+
+def get_odds(competition_key: str = "Q63E-wddv-ddp4"):
+    """Return odds for a competition."""
+    odds_results = []
+    for base in BASE_URLS:
+        url = f"{base}/odds"
+        params = {"competitionKeys": competition_key}
+        resp = make_request(url, params=params)
+        if resp and isinstance(resp, dict) and "odds" in resp:
+            print(f"[OK] {url} -> {len(resp['odds'])} odds entries")
+            odds_results.extend(resp["odds"])
+        else:
+            print(f"[WARN] {url} returned no odds data")
+    return odds_results
+
+
+def get_props(competition_key: str = "Q63E-wddv-ddp4"):
+    """Return props for a competition."""
+    props_results = []
+    for base in BASE_URLS:
+        url = f"{base}/props"
+        params = {"competitionKeys": competition_key}
+        resp = make_request(url, params=params)
+        if resp and isinstance(resp, dict) and "props" in resp:
+            print(f"[OK] {url} -> {len(resp['props'])} props entries")
+            props_results.extend(resp["props"])
+        else:
+            print(f"[WARN] {url} returned no props data")
+    return props_results
+
+
+def get_advantages(competition_key: str = "Q63E-wddv-ddp4"):
+    """Return advantages for a competition."""
+    adv_results = []
+    for base in BASE_URLS:
+        url = f"{base}/advantages"
+        params = {"competitionKeys": competition_key}
+        resp = make_request(url, params=params)
+        if resp and isinstance(resp, dict) and "advantages" in resp:
+            print(f"[OK] {url} -> {len(resp['advantages'])} advantage entries")
+            adv_results.extend(resp["advantages"])
+        else:
+            print(f"[WARN] {url} returned no advantages data")
+    return adv_results
