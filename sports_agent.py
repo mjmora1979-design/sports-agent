@@ -95,7 +95,6 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, mode
     mode options:
       - "live": pulls current odds from API
       - "historical": pulls stored odds from Google Sheets
-      - "props_only": can be added later
     """
     week = None
     if sport in ["nfl", "ncaaf"]:
@@ -106,12 +105,13 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, mode
 
     games = []
     rows_for_sheets = []
+    source_flag = "unknown"
 
     # --- Mode Handling ---
     if mode == "historical":
         print("[DEBUG] Reading historical odds from Sheets...")
         rows_for_sheets = read_from_sheets(sport)
-        # Sheets data → group back into games
+        source_flag = "historical"
         if rows_for_sheets:
             df = pd.DataFrame(rows_for_sheets)
             for event_id, group in df.groupby("event_id"):
@@ -119,7 +119,7 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, mode
                     "home_team": group["home"].iloc[0],
                     "away_team": group["away"].iloc[0],
                     "commence_time": group["commence_time"].iloc[0],
-                    "books": {},  # skipping detailed rebuild for brevity
+                    "books": {},
                     "summary": {}
                 }
                 games.append(game)
@@ -127,6 +127,7 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, mode
     else:  # default or "live"
         if allow_api:
             odds = get_odds(sport, start, end)
+            source_flag = "live"
             for ev in odds:
                 home = ev.get("home_team")
                 away = ev.get("away_team")
@@ -154,13 +155,14 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, mode
                 games.append(game)
 
     # ✅ Log to Sheets if we pulled fresh odds
-    if rows_for_sheets and mode == "live":
+    if rows_for_sheets and source_flag == "live":
         log_to_sheets(sport, rows_for_sheets)
 
     payload = {
         "status": "success",
         "week": week,
         "games": games,
+        "source": source_flag,   # 🔥 flag: "live" vs "historical"
         "survivor": {
             "used": [],
             "week": week
@@ -169,7 +171,7 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, mode
     return payload
 
 # -------------------------
-# Excel Export (optional)
+# Excel Export (with source flag)
 # -------------------------
 
 def to_excel(payload):
@@ -177,9 +179,18 @@ def to_excel(payload):
     games = payload.get("games", [])
     df = pd.DataFrame(games)
     output = pd.ExcelWriter("output.xlsx", engine="xlsxwriter")
+
+    # Games
     df.to_excel(output, index=False, sheet_name="games")
+
+    # Survivor
     survivor_df = pd.DataFrame([payload.get("survivor", {})])
     survivor_df.to_excel(output, index=False, sheet_name="survivor")
+
+    # Metadata / source flag
+    meta_df = pd.DataFrame([{"data_source": payload.get("source", "unknown")}])
+    meta_df.to_excel(output, index=False, sheet_name="metadata")
+
     output.close()
     with open("output.xlsx", "rb") as f:
         return f.read()
