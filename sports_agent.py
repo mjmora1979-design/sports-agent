@@ -1,3 +1,4 @@
+# sports_agent.py
 import os, datetime
 import pandas as pd
 import nfl_data_py as nfl
@@ -7,6 +8,7 @@ from sheets_writer import log_to_sheets
 # -------------------------
 # Week detection (NFL/NCAAF)
 # -------------------------
+
 def get_current_football_week():
     """Get NFL/NCAAF current week from nfl_data_py schedules."""
     try:
@@ -19,12 +21,13 @@ def get_current_football_week():
             return int(upcoming.iloc[0]['week'])
         return int(schedule['week'].max())
     except Exception as e:
-        print("Week detection failed, fallback:", e)
+        print("[ERROR] Week detection failed:", e)
         return datetime.date.today().isocalendar()[1]  # ISO week fallback
 
 # -------------------------
 # Helpers
 # -------------------------
+
 def summarize_best_prices(game):
     """Return neutral summary with best ML/spread/total/props across books."""
     summary = {
@@ -33,6 +36,7 @@ def summarize_best_prices(game):
         "best_total": {},
         "best_props": {}
     }
+
     books = game.get("books", {})
 
     # --- Moneyline
@@ -85,11 +89,14 @@ def summarize_best_prices(game):
 # -------------------------
 # Payload builder
 # -------------------------
-def build_payload(sport, allow_api=False, game_filter=None, max_games=None, force_direct_odds=False):
+
+def build_payload(sport, allow_api=False, game_filter=None, max_games=None, force_refresh=False):
     """Main odds + props payload builder."""
     week = None
     if sport in ["nfl", "ncaaf"]:
         week = get_current_football_week()
+
+    print(f"[DEBUG] Building payload for {sport}, week={week}, allow_api={allow_api}")
 
     start = datetime.datetime.utcnow().isoformat()
     end = (datetime.datetime.utcnow() + datetime.timedelta(days=7)).isoformat()
@@ -98,14 +105,20 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, forc
     rows_for_sheets = []
 
     if allow_api:
-        odds = get_odds(sport, from_date=start, to_date=end, force_direct=force_direct_odds)
-        for ev in odds[:max_games] if max_games else odds:
+        odds = get_odds(sport, days_ahead=7, force_refresh=force_refresh)
+        print(f"[DEBUG] Raw odds keys: {list(odds.keys()) if isinstance(odds, dict) else type(odds)}")
+
+        events = odds.get("events", []) if isinstance(odds, dict) else []
+        print(f"[DEBUG] Number of events returned: {len(events)}")
+
+        for idx, ev in enumerate(events):
+            print(f"[DEBUG] Processing event {idx+1}/{len(events)}: {ev.get('home_team')} vs {ev.get('away_team')}")
+
             home = ev.get("home_team")
             away = ev.get("away_team")
             event_id = ev.get("id")
             commence = ev.get("commence_time")
 
-            # Normalize book structure (DraftKings/FanDuel only)
             books = {}
             for book, data in ev.get("books", {}).items():
                 book_name = "DraftKings" if "draftkings" in book.lower() else \
@@ -122,11 +135,12 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, forc
                 "away_team": away,
                 "commence_time": commence,
                 "books": books,
-                "summary": summarize_best_prices({"books": books})
+                "summary": summarize_best_prices({"books": books}),
+                "source": "sportsbook_api"
             }
             games.append(game)
 
-            # Flatten for sheets logging
+            # ✅ Flatten for Sheets
             for book, data in books.items():
                 for team, price in data.get("h2h", {}).items():
                     rows_for_sheets.append({
@@ -139,8 +153,7 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, forc
                         "market": "moneyline",
                         "label": team,
                         "price": price,
-                        "point_or_line": "",
-                        "source": "direct_odds" if force_direct_odds else "events_odds"
+                        "point_or_line": ""
                     })
                 for spread in data.get("spreads", []):
                     rows_for_sheets.append({
@@ -153,8 +166,7 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, forc
                         "market": "spread",
                         "label": spread.get("name"),
                         "price": spread.get("price"),
-                        "point_or_line": spread.get("point"),
-                        "source": "direct_odds" if force_direct_odds else "events_odds"
+                        "point_or_line": spread.get("point")
                     })
                 for side, val in data.get("totals", {}).items():
                     rows_for_sheets.append({
@@ -167,8 +179,7 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, forc
                         "market": "total",
                         "label": side,
                         "price": val.get("price"),
-                        "point_or_line": val.get("point"),
-                        "source": "direct_odds" if force_direct_odds else "events_odds"
+                        "point_or_line": val.get("point")
                     })
                 for prop_name, players in data.get("props", {}).items():
                     for player, lines in players.items():
@@ -183,25 +194,31 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, forc
                                 "market": prop_name,
                                 "label": f"{player} {side}",
                                 "price": line.get("price"),
-                                "point_or_line": line.get("point"),
-                                "source": "direct_odds" if force_direct_odds else "events_odds"
+                                "point_or_line": line.get("point")
                             })
 
     if rows_for_sheets:
+        print(f"[DEBUG] Logging {len(rows_for_sheets)} rows to Sheets")
         log_to_sheets(sport, rows_for_sheets)
 
     payload = {
         "status": "success",
         "week": week,
         "games": games,
-        "survivor": {"used": [], "week": week}
+        "survivor": {
+            "used": [],
+            "week": week
+        }
     }
+    print(f"[DEBUG] Final payload: {len(games)} games, survivor week={week}")
     return payload
 
 # -------------------------
 # Excel Export
 # -------------------------
+
 def to_excel(payload):
+    """Return Excel bytes from payload."""
     games = payload.get("games", [])
     df = pd.DataFrame(games)
     output = pd.ExcelWriter("output.xlsx", engine="xlsxwriter")
