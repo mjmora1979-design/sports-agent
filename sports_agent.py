@@ -1,13 +1,12 @@
 import os, datetime
 import pandas as pd
 import nfl_data_py as nfl
-from sportsbook_api import get_odds   # ✅ updated import
+from sportsbook_api import get_events, get_odds
 from sheets_writer import log_to_sheets
 
 # -------------------------
 # Week detection (NFL/NCAAF)
 # -------------------------
-
 def get_current_football_week():
     """Get NFL/NCAAF current week from nfl_data_py schedules."""
     try:
@@ -26,7 +25,6 @@ def get_current_football_week():
 # -------------------------
 # Helpers
 # -------------------------
-
 def summarize_best_prices(game):
     """Return neutral summary with best ML/spread/total/props across books."""
     summary = {
@@ -63,7 +61,7 @@ def summarize_best_prices(game):
                 if side not in summary["best_total"] or price > summary["best_total"][side]["price"]:
                     summary["best_total"][side] = {"book": book, "price": price, "point": point}
 
-    # --- Props (passing yards, rushing, receiving, anytime TD, passing TDs)
+    # --- Props
     prop_targets = ["passing_yards", "rushing_yards", "receiving_yards", "anytime_td", "passing_tds"]
     for book, data in books.items():
         props = data.get("props", {})
@@ -88,7 +86,6 @@ def summarize_best_prices(game):
 # -------------------------
 # Payload builder
 # -------------------------
-
 def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
     """Main odds + props payload builder."""
     week = None
@@ -102,14 +99,20 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
     rows_for_sheets = []
 
     if allow_api:
-        odds = get_odds(sport, start, end)   # ✅ corrected call
+        # ✅ Step 1: Get events
+        events = get_events(sport, start, end)
+        event_ids = [ev.get("id") for ev in events]
+
+        # ✅ Step 2: Get odds + props for those events
+        odds = get_odds(sport, event_ids)
+
         for ev in odds:
             home = ev.get("home_team")
             away = ev.get("away_team")
             event_id = ev.get("id")
             commence = ev.get("commence_time")
 
-            # Normalize book structure (DraftKings/FanDuel only)
+            # Normalize book structure
             books = {}
             for book, data in ev.get("books", {}).items():
                 book_name = "DraftKings" if "draftkings" in book.lower() else \
@@ -207,9 +210,8 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
     return payload
 
 # -------------------------
-# Excel Export (optional)
+# Excel Export
 # -------------------------
-
 def to_excel(payload):
     """Return Excel bytes from payload."""
     games = payload.get("games", [])
