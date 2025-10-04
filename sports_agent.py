@@ -1,7 +1,7 @@
 import os, datetime
 import pandas as pd
 import nfl_data_py as nfl
-from sportsbook_api import get_odds
+from sportsbook_api_py import get_odds
 from sheets_writer import log_to_sheets
 
 # -------------------------
@@ -22,6 +22,7 @@ def get_current_football_week():
     except Exception as e:
         print("Week detection failed, fallback:", e)
         return datetime.date.today().isocalendar()[1]  # ISO week fallback
+
 
 # -------------------------
 # Helpers
@@ -63,7 +64,7 @@ def summarize_best_prices(game):
                 if side not in summary["best_total"] or price > summary["best_total"][side]["price"]:
                     summary["best_total"][side] = {"book": book, "price": price, "point": point}
 
-    # --- Props (passing yards, rushing, receiving, anytime TD, passing TDs)
+    # --- Props
     prop_targets = ["passing_yards", "rushing_yards", "receiving_yards", "anytime_td", "passing_tds"]
     for book, data in books.items():
         props = data.get("props", {})
@@ -85,40 +86,36 @@ def summarize_best_prices(game):
 
     return summary
 
+
 # -------------------------
 # Payload builder
 # -------------------------
 
-def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
+def build_payload(sport, allow_api=False, max_games=None):
     """Main odds + props payload builder."""
     week = None
     if sport in ["nfl", "ncaaf"]:
         week = get_current_football_week()
 
+    start = datetime.datetime.utcnow().isoformat()
+    end = (datetime.datetime.utcnow() + datetime.timedelta(days=7)).isoformat()
+
     games = []
     rows_for_sheets = []
 
     if allow_api:
-        # ✅ now aligned with sportsbook_api.py
-        odds = get_odds(sport)
+        odds = get_odds(sport, start=start, end=end, max_games=max_games)
+
+        # Ensure odds is iterable list
+        if isinstance(odds, dict):
+            odds = list(odds.values())
 
         for ev in odds:
             home = ev.get("home_team")
             away = ev.get("away_team")
             event_id = ev.get("id")
             commence = ev.get("commence_time")
-
-            # Normalize book structure (DraftKings/FanDuel only)
-            books = {}
-            for book, data in ev.get("books", {}).items():
-                book_name = "DraftKings" if "draftkings" in book.lower() else \
-                            "FanDuel" if "fanduel" in book.lower() else book
-                books[book_name] = {
-                    "h2h": data.get("h2h", {}),
-                    "spreads": data.get("spreads", []),
-                    "totals": data.get("totals", {}),
-                    "props": data.get("props", {})
-                }
+            books = ev.get("books", {})
 
             game = {
                 "home_team": home,
@@ -145,50 +142,6 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
                         "price": price,
                         "point_or_line": ""
                     })
-                # spreads
-                for spread in data.get("spreads", []):
-                    rows_for_sheets.append({
-                        "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
-                        "event_id": event_id,
-                        "commence_time": commence,
-                        "home": home,
-                        "away": away,
-                        "book": book,
-                        "market": "spread",
-                        "label": spread.get("name"),
-                        "price": spread.get("price"),
-                        "point_or_line": spread.get("point")
-                    })
-                # totals
-                for side, val in data.get("totals", {}).items():
-                    rows_for_sheets.append({
-                        "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
-                        "event_id": event_id,
-                        "commence_time": commence,
-                        "home": home,
-                        "away": away,
-                        "book": book,
-                        "market": "total",
-                        "label": side,
-                        "price": val.get("price"),
-                        "point_or_line": val.get("point")
-                    })
-                # props
-                for prop_name, players in data.get("props", {}).items():
-                    for player, lines in players.items():
-                        for side, line in lines.items():
-                            rows_for_sheets.append({
-                                "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
-                                "event_id": event_id,
-                                "commence_time": commence,
-                                "home": home,
-                                "away": away,
-                                "book": book,
-                                "market": prop_name,
-                                "label": f"{player} {side}",
-                                "price": line.get("price"),
-                                "point_or_line": line.get("point")
-                            })
 
     # ✅ Write to Sheets if enabled
     if rows_for_sheets:
@@ -204,19 +157,3 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None):
         }
     }
     return payload
-
-# -------------------------
-# Excel Export (optional)
-# -------------------------
-
-def to_excel(payload):
-    """Return Excel bytes from payload."""
-    games = payload.get("games", [])
-    df = pd.DataFrame(games)
-    output = pd.ExcelWriter("output.xlsx", engine="xlsxwriter")
-    df.to_excel(output, index=False, sheet_name="games")
-    survivor_df = pd.DataFrame([payload.get("survivor", {})])
-    survivor_df.to_excel(output, index=False, sheet_name="survivor")
-    output.close()
-    with open("output.xlsx", "rb") as f:
-        return f.read()
