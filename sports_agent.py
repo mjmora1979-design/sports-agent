@@ -1,18 +1,7 @@
 # sports_agent.py
-# Builds payloads using sportsbook_api for sports data, odds, and props
+import traceback
+from sportsbook_api import get_events, get_odds, get_props, get_advantages
 
-import datetime
-from sportsbook_api import (
-    get_competitions,
-    get_events,
-    get_event_details,
-    get_event_markets,
-    get_advantages,
-)
-
-# -------------------------------------------------------------
-# Build the unified payload
-# -------------------------------------------------------------
 def build_payload(
     sport_key: str,
     allow_api: bool = True,
@@ -21,97 +10,53 @@ def build_payload(
     max_games: int = 10
 ):
     """
-    Build a complete JSON payload with games, odds, props, and insights.
-
-    Args:
-        sport_key (str): Competition key or shorthand (e.g., "nfl", "nba", etc.)
-        allow_api (bool): Whether to actually call the API
-        include_props (bool): Include player/market props in payload
-        include_advantages (bool): Include advantages API insights
-        max_games (int): Limit for test mode
+    Combine sportsbook API data into one clean payload.
     """
-    print(f"[DEBUG] build_payload called with sport_key={sport_key}, allow_api={allow_api}")
+    print(f"[DEBUG] build_payload -> sport={sport_key}, allow_api={allow_api}")
 
-    payload = {
-        "timestamp": datetime.datetime.utcnow().isoformat(),
-        "sport": sport_key,
-        "events": [],
-        "markets": [],
-        "advantages": [],
-    }
+    try:
+        if not allow_api:
+            return {"status": "stub", "events": [], "message": "API calls disabled"}
 
-    if not allow_api:
-        print("[DEBUG] API disabled; returning stub payload.")
-        return payload
+        # Step 1: Get events
+        events_resp = get_events(sport_key)
+        events = events_resp.get("data", {}).get("events", [])
+        if not events:
+            print(f"[WARN] No events found for {sport_key}")
+            return {"status": "empty", "events": [], "source": events_resp.get("url")}
 
-    # ---------------------------------------------------------
-    # 1️⃣ Fetch competition key
-    # ---------------------------------------------------------
-    competitions_resp = get_competitions()
-    comp_list = competitions_resp.get("competitions", []) if isinstance(competitions_resp, dict) else []
-    target_competition = None
+        limited_events = events[:max_games]
+        results = []
 
-    for comp in comp_list:
-        if sport_key.lower() in comp.get("key", "").lower() or sport_key.lower() in comp.get("name", "").lower():
-            target_competition = comp.get("key")
-            break
+        # Step 2: Enrich each event
+        for e in limited_events:
+            event_id = e.get("key") or e.get("id")
+            enriched = {"event": e, "event_id": event_id}
 
-    if not target_competition:
-        print(f"[WARN] Could not match sport_key={sport_key} to a competition. Using default NFL key.")
-        target_competition = "Q63E-wddv-ddp4"  # NFL default from API examples
+            # Odds
+            odds_resp = get_odds(event_id)
+            enriched["odds"] = odds_resp.get("data")
 
-    # ---------------------------------------------------------
-    # 2️⃣ Fetch events
-    # ---------------------------------------------------------
-    print(f"[DEBUG] Fetching events for competition {target_competition}...")
-    events_resp = get_events(target_competition)
-    events = events_resp.get("events", []) if isinstance(events_resp, dict) else []
+            # Props (optional)
+            if include_props:
+                props_resp = get_props(event_id)
+                enriched["props"] = props_resp.get("data")
 
-    if not events:
-        print(f"[WARN] No events found for {sport_key}")
-        return payload
+            # Advantages (optional)
+            if include_advantages:
+                adv_resp = get_advantages(event_id)
+                enriched["advantages"] = adv_resp.get("data")
 
-    events = events[:max_games]
-    payload["events"] = events
+            results.append(enriched)
 
-    # ---------------------------------------------------------
-    # 3️⃣ Fetch markets & props for each event
-    # ---------------------------------------------------------
-    print(f"[DEBUG] Fetching markets for up to {len(events)} events...")
-    for event in events:
-        event_key = event.get("key")
-        if not event_key:
-            continue
+        return {
+            "status": "success",
+            "sport": sport_key,
+            "event_count": len(results),
+            "events": results
+        }
 
-        details = get_event_details(event_key)
-        markets = get_event_markets(event_key) if include_props else {}
-
-        payload["markets"].append({
-            "event_key": event_key,
-            "details": details,
-            "markets": markets
-        })
-
-    # ---------------------------------------------------------
-    # 4️⃣ Fetch advantages (optional insights)
-    # ---------------------------------------------------------
-    if include_advantages:
-        print("[DEBUG] Fetching advantages...")
-        adv_data = get_advantages()
-        payload["advantages"] = adv_data
-
-    # ---------------------------------------------------------
-    # 5️⃣ Return structured payload
-    # ---------------------------------------------------------
-    print(f"[DEBUG] Payload built successfully with {len(payload['events'])} events.")
-    return payload
-
-
-# -------------------------------------------------------------
-# 6️⃣ Debug mode
-# -------------------------------------------------------------
-if __name__ == "__main__":
-    print("[DEBUG] Starting sports_agent.py self-test...")
-    data = build_payload("nfl", allow_api=True, include_props=True, include_advantages=True, max_games=3)
-    import json
-    print(json.dumps(data, indent=2))
+    except Exception:
+        print("[ERROR] Exception in build_payload:")
+        print(traceback.format_exc())
+        return {"status": "error", "trace": traceback.format_exc()}
