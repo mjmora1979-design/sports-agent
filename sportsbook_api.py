@@ -2,69 +2,37 @@ import os
 import requests
 import datetime
 
-RAPIDAPI_HOST = os.getenv("SPORTSBOOK_RAPIDAPI_HOST", "sportsbook-api2.p.rapidapi.com")
-RAPIDAPI_KEY = os.getenv("SPORTSBOOK_RAPIDAPI_KEY")
+API_HOST = os.getenv("SPORTSBOOK_RAPIDAPI_HOST")
+API_KEY = os.getenv("SPORTSBOOK_RAPIDAPI_KEY")
 
-# Supported sports for safety
-SUPPORTED_SPORTS = ["nfl", "ncaaf", "nba", "mlb", "nhl"]
+BASE_URL = f"https://{API_HOST}"
 
 def _headers():
-    if not RAPIDAPI_KEY:
-        print("[WARN] No RAPIDAPI_KEY in env, requests may fail.")
     return {
-        "X-RapidAPI-Host": RAPIDAPI_HOST,
-        "X-RapidAPI-Key": RAPIDAPI_KEY or ""
+        "X-RapidAPI-Host": API_HOST,
+        "X-RapidAPI-Key": API_KEY
     }
 
-def get_events(sport, start=None, end=None, max_games=None):
-    """Fetch events (games) for given sport."""
-    if sport not in SUPPORTED_SPORTS:
-        raise ValueError(f"Unsupported sport: {sport}")
+def get_events(sport, start=None, end=None, region="us"):
+    """Fetch events list for given sport."""
+    url = f"{BASE_URL}/events"
+    params = {"sport": sport, "region": region}
+    if start: params["from"] = start
+    if end: params["to"] = end
 
-    url = f"https://{RAPIDAPI_HOST}/events"
-    params = {"sport": sport, "region": "us"}
-    if start and end:
-        params["from"] = start
-        params["to"] = end
+    resp = requests.get(url, headers=_headers(), params=params)
+    resp.raise_for_status()
+    return resp.json().get("events", [])
 
-    try:
-        resp = requests.get(url, headers=_headers(), params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        events = data.get("events", [])
-        if max_games:
-            events = events[:max_games]
-        return events
-    except Exception as e:
-        print("[ERROR] get_events:", e)
-        return []
-
-def get_odds(sport, event_ids=None, mode="all"):
-    """
-    Fetch odds for sport or specific event IDs.
-    mode = "open" (first snapshot), "close" (final snapshot), "all" (default).
-    """
-    if sport not in SUPPORTED_SPORTS:
-        raise ValueError(f"Unsupported sport: {sport}")
-
-    url = f"https://{RAPIDAPI_HOST}/odds"
-    params = {
-        "sport": sport,
-        "region": "us",
-        "mkt": "h2h,spreads,totals,player_props",
-        "oddsFormat": "american"
-    }
+def get_odds(sport, event_ids=None, markets=None, region="us", odds_format="american"):
+    """Fetch odds/markets/props for given sport or event_ids."""
+    url = f"{BASE_URL}/odds"
+    params = {"sport": sport, "region": region, "oddsFormat": odds_format}
+    if markets:
+        params["mkt"] = ",".join(markets)
     if event_ids:
         params["eventIds"] = ",".join(event_ids)
-    if mode in ["open", "close"]:
-        params["state"] = mode
 
-    try:
-        resp = requests.get(url, headers=_headers(), params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("events", [])
-    except Exception as e:
-        print("[ERROR] get_odds:", e)
-        return []
-
+    resp = requests.get(url, headers=_headers(), params=params)
+    resp.raise_for_status()
+    return resp.json().get("odds", [])
