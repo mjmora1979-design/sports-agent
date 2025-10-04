@@ -86,7 +86,7 @@ def summarize_best_prices(game):
     return summary
 
 # -------------------------
-# Payload builder
+# Payload builder with fallback
 # -------------------------
 
 def build_payload(sport, allow_api=False, game_filter=None, max_games=None, mode=None):
@@ -95,6 +95,7 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, mode
     mode options:
       - "live": pulls current odds from API
       - "historical": pulls stored odds from Google Sheets
+      - None/default: auto (try live, fallback to historical)
     """
     week = None
     if sport in ["nfl", "ncaaf"]:
@@ -107,25 +108,12 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, mode
     rows_for_sheets = []
     source_flag = "unknown"
 
-    # --- Mode Handling ---
-    if mode == "historical":
-        print("[DEBUG] Reading historical odds from Sheets...")
-        rows_for_sheets = read_from_sheets(sport)
-        source_flag = "historical"
-        if rows_for_sheets:
-            df = pd.DataFrame(rows_for_sheets)
-            for event_id, group in df.groupby("event_id"):
-                game = {
-                    "home_team": group["home"].iloc[0],
-                    "away_team": group["away"].iloc[0],
-                    "commence_time": group["commence_time"].iloc[0],
-                    "books": {},
-                    "summary": {}
-                }
-                games.append(game)
+    try:
+        if mode == "historical":
+            raise RuntimeError("Force historical mode")
 
-    else:  # default or "live"
         if allow_api:
+            print("[DEBUG] Trying live odds...")
             odds = get_odds(sport, start, end)
             source_flag = "live"
             for ev in odds:
@@ -154,15 +142,31 @@ def build_payload(sport, allow_api=False, game_filter=None, max_games=None, mode
                 }
                 games.append(game)
 
-    # ✅ Log to Sheets if we pulled fresh odds
-    if rows_for_sheets and source_flag == "live":
-        log_to_sheets(sport, rows_for_sheets)
+            # log rows if needed
+            if games:
+                log_to_sheets(sport, rows_for_sheets)
+
+    except Exception as e:
+        print(f"[WARN] Live odds failed ({e}), falling back to Sheets...")
+        rows_for_sheets = read_from_sheets(sport)
+        source_flag = "historical (fallback)"
+        if rows_for_sheets:
+            df = pd.DataFrame(rows_for_sheets)
+            for event_id, group in df.groupby("event_id"):
+                game = {
+                    "home_team": group["home"].iloc[0],
+                    "away_team": group["away"].iloc[0],
+                    "commence_time": group["commence_time"].iloc[0],
+                    "books": {},
+                    "summary": {}
+                }
+                games.append(game)
 
     payload = {
         "status": "success",
         "week": week,
         "games": games,
-        "source": source_flag,   # 🔥 flag: "live" vs "historical"
+        "source": source_flag,   # 🔥 live / historical / fallback
         "survivor": {
             "used": [],
             "week": week
