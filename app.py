@@ -17,7 +17,7 @@ def home():
 # === Check environment variable ===
 @app.route("/check-key")
 def check_key():
-    key = os.getenv("RAPIDAPI_KEY")
+    key = os.getenv("RAPIDAPI_KEY") or os.getenv("SPORTSBOOK_RAPIDAPI_KEY")
     return jsonify({
         "key_present": bool(key),
         "key_length": len(key) if key else 0,
@@ -32,7 +32,7 @@ def test_api():
     sport = request.args.get("sport", "nfl")
     url = "https://sportsbook-api2.p.rapidapi.com/v0/events"
     headers = {
-        "X-RapidAPI-Key": os.getenv("RAPIDAPI_KEY"),
+        "X-RapidAPI-Key": os.getenv("RAPIDAPI_KEY") or os.getenv("SPORTSBOOK_RAPIDAPI_KEY"),
         "X-RapidAPI-Host": "sportsbook-api2.p.rapidapi.com"
     }
     params = {"sport": sport}
@@ -42,7 +42,7 @@ def test_api():
         return jsonify({
             "sport": sport,
             "status": resp.status_code,
-            "text": resp.text[:300]  # first few hundred chars only
+            "text": resp.text[:300]  # preview only
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -63,7 +63,7 @@ def debug_api():
     sports = ["nfl", "americanfootball_nfl", "nba", "americanfootball_ncaaf"]
 
     headers = {
-        "X-RapidAPI-Key": os.getenv("RAPIDAPI_KEY"),
+        "X-RapidAPI-Key": os.getenv("RAPIDAPI_KEY") or os.getenv("SPORTSBOOK_RAPIDAPI_KEY"),
         "X-RapidAPI-Host": "sportsbook-api2.p.rapidapi.com"
     }
 
@@ -114,6 +114,9 @@ def ping():
     return "pong"
 
 
+# === Entry point ===
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    # Render assigns an ephemeral port at runtime; default to 10000 if not set
+    port = int(os.environ.get("PORT", 10000))
+    print(f"[INFO] Starting Flask on port {port}")
     app.run(host="0.0.0.0", port=port)
