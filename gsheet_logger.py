@@ -1,19 +1,27 @@
-import gspread
+import os, json, gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 
-# === CONFIG ===
-SHEET_ID = "1-c4BMXcV_0cXl2yFNBUygUSiLeHRyKPYQQIo32IStek"  # e.g., 1WF0NB9fnxhDPEi_arGSp18Kev9KXdoX-IePIE8KJgCQ
-WORKSHEET_NAME = "Sportsdata"          # This is your tab name
-CREDENTIALS_FILE = "credentials.json"
+SHEET_ID = "1-c4BMXcV_0cXl2yFNBUygUSiLeHRyKPYQQIo32IStek"
+WORKSHEET_NAME = "Sportsdata"
+
+def get_creds():
+    """Loads credentials from either environment variable or local file."""
+    if os.path.exists("credentials.json"):
+        with open("credentials.json", "r") as f:
+            return json.load(f)
+    elif os.getenv("GOOGLE_CREDS_JSON"):
+        return json.loads(os.getenv("GOOGLE_CREDS_JSON"))
+    else:
+        raise FileNotFoundError("No credentials.json file or GOOGLE_CREDS_JSON env var found.")
 
 def get_sheet():
     scope = ["https://spreadsheets.google.com/feeds",
              "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+    creds_dict = get_creds()
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
-    sheet = client.open_by_key(SHEET_ID).worksheet(WORKSHEET_NAME)
-    return sheet
+    return client.open_by_key(SHEET_ID).worksheet(WORKSHEET_NAME)
 
 def log_to_sheets(data, sheet_name=WORKSHEET_NAME):
     sheet = get_sheet()
