@@ -1,65 +1,57 @@
 import datetime
+from typing import Any, Dict, List, Optional
+
 from sportsbook_api import (
-    get_events,
-    get_odds,
-    get_props,
-    get_advantages
+    find_competition_key_for_sport,
+    fetch_events_with_markets_and_outcomes,
+    list_advantages,
 )
+
 
 def build_payload(
     sport: str,
     allow_api: bool = True,
-    include_props: bool = True,
-    include_adv: bool = True,
-    max_games: int = 10
-):
+    max_games: int = 5,
+    outcome_mode: str = "last",               # "last" or "closing"
+    allowed_market_types: Optional[List[str]] = None,  # e.g. ["MONEYLINE","POINT_SPREAD","POINT_TOTAL"]
+    include_advantages: bool = True,
+) -> Dict[str, Any]:
     """
-    Build the JSON payload with events, odds, props, and advantages.
-
-    Args:
-        sport (str): The sport key ("nfl", "nba", etc.)
-        allow_api (bool): Whether to call the API
-        include_props (bool): Whether to pull props
-        include_adv (bool): Whether to pull advantages
-        max_games (int): Max number of games for quick testing
+    Orchestrates a single snapshot payload:
+      - competition key (by sport)
+      - events + markets + outcomes
+      - optional advantages
     """
-    print(f"[DEBUG] build_payload -> sport={sport}, allow_api={allow_api}")
-
-    data = {
+    payload: Dict[str, Any] = {
         "sport": sport,
         "timestamp": datetime.datetime.utcnow().isoformat(),
-        "status": "success",
-        "events": [],
-        "odds": [],
-        "props": [],
-        "advantages": []
+        "status": "ok",
+        "events_bundle": {},
+        "advantages": None,
+        "notes": {
+            "outcome_mode": outcome_mode,
+            "allowed_market_types": allowed_market_types or ["ALL"],
+        }
     }
 
     if not allow_api:
-        data["status"] = "stub"
-        return data
+        payload["status"] = "disabled"
+        return payload
 
-    # NFL competition key (can expand logic later)
-    competition_key = "Q63E-wddv-ddp4" if sport.lower() == "nfl" else None
+    comp_key = find_competition_key_for_sport(sport)
+    if not comp_key:
+        payload["status"] = "no_competition_for_sport"
+        return payload
 
-    # 1️⃣ Events
-    events = get_events(sport, competition_key)
-    data["events"] = events[:max_games] if events else []
+    bundle = fetch_events_with_markets_and_outcomes(
+        competition_key=comp_key,
+        max_events=max_games,
+        outcome_mode=outcome_mode,
+        allowed_market_types=allowed_market_types
+    )
+    payload["events_bundle"] = bundle
 
-    # 2️⃣ Odds
-    odds = get_odds(competition_key)
-    data["odds"] = odds
+    if include_advantages:
+        payload["advantages"] = list_advantages(type_str="ARBITRAGE")
 
-    # 3️⃣ Props
-    if include_props:
-        props = get_props(competition_key)
-        data["props"] = props
-
-    # 4️⃣ Advantages
-    if include_adv:
-        adv = get_advantages(competition_key)
-        data["advantages"] = adv
-
-    data["event_count"] = len(data["events"])
-    print(f"[DEBUG] build_payload complete with {data['event_count']} events")
-    return data
+    return payload
