@@ -1,8 +1,9 @@
-import os, requests
+import os
+import requests
+import traceback
 
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
-RAPIDAPI_HOST = "sportsbook-api2.p.rapidapi.com"
-
+RAPIDAPI_HOST = os.getenv("RAPIDAPI_HOST", "sportsbook-api2.p.rapidapi.com")
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "")
 HEADERS = {
     "x-rapidapi-host": RAPIDAPI_HOST,
     "x-rapidapi-key": RAPIDAPI_KEY
@@ -10,15 +11,14 @@ HEADERS = {
 
 def get_events(sport="nfl"):
     """
-    Fetches current events from sportsbook API (v0 competition instance)
+    Fetch competition events + markets (odds) for the given sport.
     """
-    url = "https://sportsbook-api2.p.rapidapi.com/v0/competitions/Q63E-wddv-ddp4/events?eventType=MATCH"
+    # For now, we assume NFL competitionKey
+    url = f"https://{RAPIDAPI_HOST}/v0/competitions/Q63E-wddv-ddp4/events?eventType=MATCH"
     try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        data = response.json()
-        if "events" not in data:
-            return {"events": [], "status": "no_events"}
-        return {"events": data["events"], "status": "success"}
-    except Exception as e:
-        print(f"[ERROR] get_events failed: {e}")
-        return {"events": [], "status": "error"}
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        data = resp.json()
+        return data
+    except Exception:
+        print("[ERROR] get_events:", traceback.format_exc())
+        return {"events": []}
