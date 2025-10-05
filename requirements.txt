@@ -19,3 +19,6 @@ nfl_data_py==0.3.3
 gspread==6.0.0
 google-auth==2.35.0
 google-auth-oauthlib==1.2.1
+
+oauth2client==4.1.3
+
