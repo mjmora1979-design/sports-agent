@@ -1,120 +1,118 @@
-# app.py
-# Flask backend for the Sports Agent app
-# Integrates with sportsbook_api and sports_agent modules
-
 from flask import Flask, request, jsonify
-from sports_agent import build_payload
 import os
 import datetime
 import traceback
 
+from sports_agent import build_payload
+
 app = Flask(__name__)
 
-# -------------------------------------------------------------
-# 🔧 Root route for quick health checks
-# -------------------------------------------------------------
 @app.route("/")
-def home():
+def root():
     return jsonify({
         "status": "ok",
-        "message": "Sports Agent API is live!",
+        "message": "sports-agent is live",
         "timestamp": datetime.datetime.utcnow().isoformat()
     })
 
-# -------------------------------------------------------------
-# 🧠 Debug route to view sportsbook API results
-# Example: /debug-api?sport=nfl
-# -------------------------------------------------------------
-@app.route("/debug-api", methods=["GET"])
-def debug_api():
-    sport = request.args.get("sport", "nfl")
-    include_props = request.args.get("props", "true").lower() == "true"
-    include_advantages = request.args.get("adv", "true").lower() == "true"
-
-    print(f"[DEBUG] /debug-api called with sport={sport}, props={include_props}, adv={include_advantages}")
-
-    try:
-        payload = build_payload(
-            sport_key=sport,
-            allow_api=True,
-            include_props=include_props,
-            include_advantages=include_advantages,
-            max_games=5
-        )
-        return jsonify(payload)
-    except Exception as e:
-        print(f"[ERROR] Exception in /debug-api: {traceback.format_exc()}")
-        return jsonify({"status": "error", "error": str(e)}), 500
-
-# -------------------------------------------------------------
-# ⚙️ Environment check route
-# -------------------------------------------------------------
-@app.route("/check-env", methods=["GET"])
+@app.route("/check-env")
 def check_env():
     key = os.getenv("RAPIDAPI_KEY", "")
     host = os.getenv("RAPIDAPI_HOST", "")
-    result = {
+    return jsonify({
         "host": host or "missing",
         "key_present": bool(key),
         "key_length": len(key),
-        "timestamp": datetime.datetime.utcnow().isoformat(),
-    }
-    return jsonify(result)
+        "timestamp": datetime.datetime.utcnow().isoformat()
+    })
 
-# -------------------------------------------------------------
-# 🧩 Model API — “North Star” Integration
-# -------------------------------------------------------------
-# This will later serve your model analysis layer or ChatGPT custom GPT
-# For now, it will return a combined package of:
-#   - events
-#   - odds
-#   - props
-#   - advantages (if available)
-#   - metadata for model scoring
-# -------------------------------------------------------------
-@app.route("/model-api", methods=["POST"])
-def model_api():
+@app.route("/test-api")
+def test_api():
+    """Lightweight health + one simple fetch (competitions) to verify keys work."""
     try:
-        data = request.get_json(force=True)
-        sport = data.get("sport", "nfl")
-        include_props = data.get("include_props", True)
-        include_advantages = data.get("include_advantages", True)
-        model_id = data.get("model_id", "default-v1")
-
-        print(f"[INFO] /model-api request for sport={sport}, model={model_id}")
-
-        # Pull the live payload
-        payload = build_payload(
-            sport_key=sport,
-            allow_api=True,
-            include_props=include_props,
-            include_advantages=include_advantages,
-            max_games=10
-        )
-
-        # Add a metadata block for downstream ML integration
-        response = {
-            "model_id": model_id,
-            "sport": sport,
-            "timestamp": datetime.datetime.utcnow().isoformat(),
-            "payload": payload,
-            "metadata": {
-                "source": "sportsbook-api2",
-                "integration": "north_star_v1",
-                "description": "Unified data for modeling and ChatGPT integration"
-            }
-        }
-
-        return jsonify(response)
-
+        from sportsbook_api import list_competitions
+        data = list_competitions()
+        count = len((data or {}).get("competitions", [])) if isinstance(data, dict) else 0
+        return jsonify({
+            "ok": bool(data),
+            "competitions_count": count,
+            "sample_keys": (data or {}).get("competitions", [])[:3],
+            "timestamp": datetime.datetime.utcnow().isoformat()
+        })
     except Exception as e:
-        print(f"[ERROR] Exception in /model-api: {traceback.format_exc()}")
+        print("[ERROR] /test-api\n", traceback.format_exc())
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/debug-api")
+def debug_api():
+    """
+    Debug snapshot:
+      /debug-api?sport=nfl&max=5&mode=last&markets=MONEYLINE,POINT_SPREAD,POINT_TOTAL&advantages=true
+    """
+    sport = request.args.get("sport", "nfl")
+    max_games = int(request.args.get("max", "5"))
+    outcome_mode = request.args.get("mode", "last").lower()
+    include_advantages = request.args.get("advantages", "true").lower() == "true"
+
+    markets_arg = request.args.get("markets")  # comma-separated or None
+    allowed_market_types = None
+    if markets_arg:
+        allowed_market_types = [m.strip() for m in markets_arg.split(",") if m.strip()]
+
+    try:
+        payload = build_payload(
+            sport=sport,
+            allow_api=True,
+            max_games=max_games,
+            outcome_mode=outcome_mode if outcome_mode in ("last", "closing") else "last",
+            allowed_market_types=allowed_market_types,
+            include_advantages=include_advantages
+        )
+        return jsonify(payload)
+    except Exception as e:
+        print("[ERROR] /debug-api\n", traceback.format_exc())
         return jsonify({"status": "error", "error": str(e)}), 500
 
-# -------------------------------------------------------------
-# 🏁 Launch app with gunicorn in Render
-# -------------------------------------------------------------
+@app.route("/run", methods=["POST"])
+def run():
+    """
+    POST JSON:
+      {
+        "sport": "nfl",
+        "allow_api": true,
+        "max_games": 5,
+        "outcome_mode": "last",    # or "closing"
+        "markets": ["MONEYLINE","POINT_SPREAD","POINT_TOTAL"],
+        "include_advantages": true
+      }
+    """
+    try:
+        data = request.get_json(force=True) or {}
+        sport = data.get("sport", "nfl")
+        allow_api = bool(data.get("allow_api", True))
+        max_games = int(data.get("max_games", 5))
+        outcome_mode = (data.get("outcome_mode", "last") or "last").lower()
+        include_advantages = bool(data.get("include_advantages", True))
+        allowed_market_types = data.get("markets")  # list or None
+
+        payload = build_payload(
+            sport=sport,
+            allow_api=allow_api,
+            max_games=max_games,
+            outcome_mode=outcome_mode if outcome_mode in ("last", "closing") else "last",
+            allowed_market_types=allowed_market_types,
+            include_advantages=include_advantages
+        )
+        return jsonify({
+            "status": "success",
+            "sport": sport,
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "payload": payload
+        })
+    except Exception as e:
+        print("[ERROR] /run\n", traceback.format_exc())
+        return jsonify({"status": "error", "error": str(e)}), 500
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    print(f"[INFO] Starting Flask server on port {port}")
+    port = int(os.environ.get("PORT", "10000"))
     app.run(host="0.0.0.0", port=port, debug=True)
