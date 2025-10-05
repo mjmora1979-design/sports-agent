@@ -1,39 +1,46 @@
 import datetime
+import traceback
 from sportsbook_api import get_events
-from prop_scraper import get_nfl_props
+from scraper_props import scrape_props_for_sport
 from gsheet_logger import log_to_sheets
 
-def build_payload(sport="nfl", props=True, allow_api=True):
+def build_payload(sport="nfl", props=True, fresh_props=False):
     """
-    Core data builder — merges event data + scraped props, logs to Sheets
+    Builds the full payload:
+     - events + markets from API
+     - props / injuries scraped
+     - logs to sheet
     """
-    print(f"[DEBUG] build_payload(sport={sport}, props={props}, allow_api={allow_api})")
-    payload = {"timestamp": datetime.datetime.utcnow().isoformat(), "sport": sport, "events": []}
+    result = {
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "sport": sport,
+        "events": [],
+        "props": [],
+        "status": "ok"
+    }
 
-    # --- Step 1: Get event data ---
-    events = []
-    if allow_api:
-        api_data = get_events(sport)
-        events = api_data.get("events", [])
-        print(f"[OK] Retrieved {len(events)} {sport} events from API")
-
-    # --- Step 2: Scrape props if applicable ---
-    props_data = []
-    if sport == "nfl" and props:
-        props_data = get_nfl_props()
-        print(f"[OK] Retrieved {len(props_data)} props from scraper")
-
-    payload["events"] = events
-    payload["props"] = props_data
-
-    # --- Step 3: Log to Google Sheets ---
+    # Step 1: pull events + markets
     try:
-        log_to_sheets(sport, events, props_data)
-        print("[SHEETS] Logged successfully")
+        ev = get_events(sport)
+        result["events"] = ev.get("events", [])
     except Exception as e:
-        print(f"[WARN] Google Sheets logging failed: {e}")
+        print(f"[ERROR] get_events failed: {traceback.format_exc()}")
+        result["status"] = "error_events"
 
-    payload["status"] = "success"
-    payload["event_count"] = len(events)
-    payload["prop_count"] = len(props_data)
-    return payload
+    # Step 2: scrape props/injuries if requested
+    if props:
+        try:
+            prop_list = scrape_props_for_sport(sport, fresh=fresh_props)
+            result["props"] = prop_list
+        except Exception as e:
+            print(f"[WARN] scrape_props_for_sport failed: {traceback.format_exc()}")
+
+    # Step 3: log to Google Sheets
+    try:
+        log_to_sheets(sport, result["events"], result["props"])
+    except Exception as e:
+        print(f"[WARN] log_to_sheets failed: {e}")
+
+    result["event_count"] = len(result["events"])
+    result["prop_count"] = len(result["props"])
+    return result
