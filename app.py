@@ -6,21 +6,24 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Sports Agent API active"
+    return jsonify({"status": "ok", "message": "sports-agent up", "ts": datetime.datetime.utcnow().isoformat()})
 
 @app.route("/debug-api", methods=["GET"])
 def debug_api():
     sport = request.args.get("sport", "nfl")
-    props = request.args.get("props", "true").lower() == "true"
-    debug = build_payload(sport=sport, props=props, allow_api=True)
-    return jsonify(debug)
+    props_flag = request.args.get("props", "true").lower() == "true"
+    # optional param to force fresh scrape
+    fresh = request.args.get("fresh", "false").lower() == "true"
+    payload = build_payload(sport=sport, props=props_flag, fresh_props=fresh)
+    return jsonify(payload)
 
-@app.route("/build", methods=["POST"])
-def build():
-    data = request.get_json(force=True)
+@app.route("/run", methods=["POST"])
+def run():
+    data = request.get_json(force=True) or {}
     sport = data.get("sport", "nfl")
-    props = data.get("props", True)
-    payload = build_payload(sport=sport, props=props, allow_api=True)
+    props_flag = data.get("props", True)
+    fresh = data.get("fresh_props", False)
+    payload = build_payload(sport=sport, props=props_flag, fresh_props=fresh)
     return jsonify(payload)
 
 if __name__ == "__main__":
