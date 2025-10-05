@@ -2,7 +2,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-SHEET_ID = "YOUR_SHEET_ID"  # fill in
+SHEET_ID = "1-c4BMXcV_0cXl2yFNBUygUSiLeHRyKPYQQIo32IStek"  # fill in
 CREDS_FILE = "credentials.json"
 
 def log_to_sheets(sport, events, props):
