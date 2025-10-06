@@ -1,26 +1,30 @@
 import requests
 from bs4 import BeautifulSoup
-from gsheet_logger import log_to_sheets
+import datetime
 
-def scrape_props_example():
-    """
-    Example placeholder scraper.
-    Replace with live sources for props or lines.
-    """
-    url = "https://www.espn.com/nfl/lines"
-    resp = requests.get(url, timeout=10)
-    soup = BeautifulSoup(resp.text, "html.parser")
-
+def scrape_props(max_players=50):
+    """Scrape popular player prop lines from CBS Sports (passing, rushing, receiving, TDs)."""
+    url = "https://www.cbssports.com/nfl/props/"
     props = []
-    for game in soup.select("section.GameCell"):
-        title = game.select_one("a.AnchorLink").get_text(strip=True)
-        props.append({"source": "espn", "game": title})
+    try:
+        html = requests.get(url, timeout=15).text
+        soup = BeautifulSoup(html, "html.parser")
 
-    if props:
-        log_to_sheets(props)
-        print(f"[OK] Logged {len(props)} props to Sheets.")
-    else:
-        print("[WARN] No props found on page.")
+        rows = soup.select("tr")[:max_players]
+        for row in rows:
+            cols = [c.text.strip() for c in row.find_all("td")]
+            if len(cols) >= 4:
+                player, team, prop_type, line = cols[:4]
+                if any(k in prop_type.lower() for k in ["pass", "rush", "receiv", "touchdown"]):
+                    props.append({
+                        "player": player,
+                        "team": team,
+                        "market": prop_type,
+                        "line": line,
+                        "timestamp": datetime.datetime.utcnow().isoformat()
+                    })
 
-if __name__ == "__main__":
-    scrape_props_example()
+        print(f"[OK] Scraped {len(props)} props from CBS Sports")
+    except Exception as e:
+        print(f"[ERROR] scrape_props: {e}")
+    return props
