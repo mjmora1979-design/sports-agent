@@ -2,19 +2,24 @@ import requests
 from bs4 import BeautifulSoup
 import datetime
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
 def scrape_props(max_props=150):
-    """Scrape QB/RB/WR/TE props from Rotowire and Action Network."""
     props = []
     timestamp = datetime.datetime.utcnow().isoformat()
 
     try:
-        # ROTOWIRE
-        rw_html = requests.get("https://www.rotowire.com/betting/nfl/prop-bets.php", timeout=20).text
+        # Rotowire first
+        rw_html = requests.get("https://www.rotowire.com/betting/nfl/prop-bets.php",
+                               headers=HEADERS, timeout=25).text
         rw = BeautifulSoup(rw_html, "html.parser")
 
-        rows = rw.select("tr")[:max_props]
-        for r in rows:
-            cols = [c.text.strip() for c in r.find_all("td")]
+        for row in rw.select("tr")[:max_props]:
+            cols = [c.text.strip() for c in row.find_all("td")]
             if len(cols) >= 4:
                 player, team, market, line = cols[:4]
                 if any(k in market.lower() for k in ["pass", "rush", "receiv", "touchdown"]):
@@ -27,28 +32,26 @@ def scrape_props(max_props=150):
                         "timestamp": timestamp
                     })
 
-        # ACTION NETWORK
-        an_html = requests.get("https://www.actionnetwork.com/nfl/player-prop-bets", timeout=20).text
-        an = BeautifulSoup(an_html, "html.parser")
-        tables = an.select("div.player-prop-row")
+        print(f"[OK] Found {len(props)} props from Rotowire.")
 
-        for t in tables[:max_props]:
-            name = t.select_one("div.player-prop-name")
-            stat = t.select_one("div.player-prop-stat")
-            val = t.select_one("div.player-prop-line")
-            if name and stat and val:
-                stat_text = stat.text.lower()
-                if any(k in stat_text for k in ["passing", "rushing", "receiving", "touchdown"]):
+        # If Rotowire was blocked, fallback to Covers
+        if len(props) == 0:
+            covers_html = requests.get("https://www.covers.com/sport/football/nfl/player-props",
+                                       headers=HEADERS, timeout=25).text
+            cs = BeautifulSoup(covers_html, "html.parser")
+            for item in cs.select("div.covers-CustomLink"):
+                txt = item.get_text(" ", strip=True)
+                if any(word in txt.lower() for word in ["yards", "touchdown", "passing", "rushing"]):
                     props.append({
-                        "player": name.text.strip(),
+                        "player": txt.split(" ")[0],
                         "team": None,
-                        "market": stat.text.strip(),
-                        "line": val.text.strip(),
-                        "source": "ActionNetwork",
+                        "market": " ".join(txt.split(" ")[1:]),
+                        "line": None,
+                        "source": "Covers",
                         "timestamp": timestamp
                     })
 
-        print(f"[OK] Scraped {len(props)} player props from Rotowire + Action Network.")
+        print(f"[OK] Total props collected: {len(props)}")
 
     except Exception as e:
         print(f"[ERROR] scrape_props: {e}")
