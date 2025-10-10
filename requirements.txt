@@ -4,7 +4,6 @@ gunicorn==23.0.0
 
 # HTTP + API
 requests==2.32.3
-beautifulsoup4==4.12.3
 
 # Data handling
 pandas==1.5.3
@@ -12,11 +11,10 @@ numpy==1.26.4
 openpyxl==3.1.5
 xlsxwriter==3.2.0
 
-# Sports data
+# Sports data (for internal model features)
 nfl_data_py==0.3.3
 
 # Google Sheets + Auth
 gspread==6.0.0
 google-auth==2.35.0
 google-auth-oauthlib==1.2.1
-oauth2client==4.1.3
