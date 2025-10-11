@@ -16,6 +16,7 @@ import os
 from model_payload import build_model_payload
 from sports_agent import build_payload
 
+
 # ------------------------------------------------------------
 # Core Monte Carlo simulation
 # ------------------------------------------------------------
@@ -102,14 +103,16 @@ def run_monte_carlo(snapshot_type="opening", n_sims=20000, sim_confidence=0.8):
 
     df = pd.DataFrame(results)
 
-    # Deduplicate by matchup for display
-    df_unique = df.sort_values(by="home_EV_%", ascending=False) \
-                  .drop_duplicates(subset=["home_team", "away_team"], keep="first")
+    # ✅ Deduplicate by matchup for display
+    df_unique = (
+        df.sort_values(by="home_EV_%", ascending=False)
+          .drop_duplicates(subset=["home_team", "away_team"], keep="first")
+    )
 
     df_sorted = df_unique.head(5)
 
     print("\n🏈 Top 5 Unique Home-side opportunities (by EV %)")
-    print(df_sorted[["bookmaker", "home_team", "away_team", "home_ml", "home_EV_%", "home_Kelly_frac"]])
+    print(df_sorted[["bookmaker", "home_team", "away_team", "home_ml", "home_EV_%", "home_Kelly_frac"]].to_string(index=False))
 
     return df
 
@@ -131,8 +134,11 @@ def calibrate_model(sim_df: pd.DataFrame, results_path="final_scores.csv"):
     merged = pd.merge(sim_df, actuals, on=["home_team", "away_team"], how="inner")
 
     # Assign predicted winner based on higher simulated win%
-    merged["predicted_winner"] = np.where(merged["home_win_sim"] > merged["away_win_sim"],
-                                          merged["home_team"], merged["away_team"])
+    merged["predicted_winner"] = np.where(
+        merged["home_win_sim"] > merged["away_win_sim"],
+        merged["home_team"],
+        merged["away_team"]
+    )
 
     merged["correct"] = merged["predicted_winner"] == merged["winner"]
 
