@@ -10,11 +10,11 @@ app = Flask(__name__)
 
 # ---------- Config (env with sensible defaults) ----------
 API_KEY                = os.getenv("SPORTS_AGENT_KEY", "local-test-key")
-MAX_SIMS               = int(os.getenv("MAX_SIMS", "20000"))           # hard ceiling
-RUNS_DAILY_QUOTA       = int(os.getenv("RUNS_DAILY_QUOTA", "40"))      # model runs/day
+MAX_SIMS               = int(os.getenv("MAX_SIMS", "20000"))           # per run (each matchup uses this count)
+RUNS_DAILY_QUOTA       = int(os.getenv("RUNS_DAILY_QUOTA", "40"))      # /run_model calls per day
 RUNS_PER_MINUTE        = int(os.getenv("RUNS_PER_MINUTE", "1"))        # throttle
-ODDS_DAILY_QUOTA       = int(os.getenv("ODDS_DAILY_QUOTA", "12"))      # odds refresh/day
-MODEL_CACHE_TTL_HOURS  = int(os.getenv("MODEL_CACHE_TTL_HOURS", "2"))  # not used here directly, but keep for reference
+ODDS_DAILY_QUOTA       = int(os.getenv("ODDS_DAILY_QUOTA", "12"))      # /refresh_odds per day
+MODEL_CACHE_TTL_HOURS  = int(os.getenv("MODEL_CACHE_TTL_HOURS", "2"))  # for your internal cache usage
 
 USAGE_STATE_PATH = "usage_state.json"
 CACHE_ODDS_PATH  = "cached_odds.json"   # your existing cache file
@@ -31,16 +31,10 @@ def load_state():
             return json.load(open(USAGE_STATE_PATH))
         except Exception:
             pass
-    # default structure
     return {
         "date": _today_str(),
-        "counts": {
-            "runs": 0,
-            "odds_api_calls": 0
-        },
-        "recent": {
-            "runs": []  # timestamps (epoch seconds) for per-minute throttle
-        }
+        "counts": {"runs": 0, "odds_api_calls": 0},
+        "recent": {"runs": []}
     }
 
 def save_state(st):
@@ -77,7 +71,6 @@ def within_minute_throttle(st, key, per_minute):
 # ---------- Security ----------
 @app.before_request
 def verify_api_key():
-    # Only guard the JSON API routes (allow healthcheck/root)
     if request.path in ("/", "/health"):
         return None
     key = request.headers.get("x-api-key")
@@ -93,11 +86,9 @@ def root():
 def health():
     return jsonify({"ok": True, "time": datetime.utcnow().isoformat()})
 
-# ---------- Optional: force refresh odds with quota ----------
+# ---------- Force-refresh odds (counts quota) ----------
 @app.route("/refresh_odds", methods=["POST"])
 def refresh_odds():
-    # This forces an API pull by deleting the cache then rebuilding payload.
-    # Counts against ODDS_DAILY_QUOTA to protect free tier.
     with state_lock:
         st = load_state()
         if not within_daily_quota(st, "odds_api_calls", ODDS_DAILY_QUOTA):
@@ -105,16 +96,14 @@ def refresh_odds():
             return jsonify({"error": "Daily odds refresh quota reached"}), 429
         save_state(st)
 
-    # Delete cache; next call to build_payload inside run_monte_carlo will re-pull
     try:
         if os.path.exists(CACHE_ODDS_PATH):
             os.remove(CACHE_ODDS_PATH)
     except Exception as e:
         return jsonify({"error": f"Failed to clear cache: {e}"}), 500
 
-    # Warm the cache by running a minimal build (no heavy sims)
     try:
-        # Small run (few sims) just to trigger odds load & save CSV/JSON outputs downstream
+        # Light warm run to trigger odds pull & cache write
         df, plays_df = run_monte_carlo(snapshot_type="opening", n_sims=2000, sim_confidence=0.8)
         return jsonify({
             "status": "refreshed",
@@ -129,11 +118,9 @@ def refresh_odds():
 def run_model():
     with state_lock:
         st = load_state()
-        # per-minute throttle first (protect bursts)
         if not within_minute_throttle(st, "runs", RUNS_PER_MINUTE):
             save_state(st)
             return jsonify({"error": "Too many requests per minute"}), 429
-        # daily quota for runs
         if not within_daily_quota(st, "runs", RUNS_DAILY_QUOTA):
             save_state(st)
             return jsonify({"error": "Daily runs quota reached"}), 429
@@ -143,20 +130,16 @@ def run_model():
     snapshot = data.get("snapshot_type", "opening")
     n_sims_req = int(data.get("n_sims", 20000))
     sim_conf  = float(data.get("sim_confidence", 0.8))
-    top_k     = max(1, min(int(data.get("top_k", 10)), 50))  # cap preview to 50 for chat
+    top_k     = max(1, min(int(data.get("top_k", 10)), 50))
 
-    # hard cap to protect CPU
-    n_sims = min(n_sims_req, MAX_SIMS)
+    n_sims = min(n_sims_req, MAX_SIMS)  # hard cap per run
 
     try:
         df, plays_df = run_monte_carlo(snapshot_type=snapshot, n_sims=n_sims, sim_confidence=sim_conf)
-
         ts = datetime.utcnow().isoformat()
         top_rows = (plays_df.sort_values(by="EV_%", ascending=False)
                              .head(top_k)
                              .to_dict(orient="records"))
-
-        # Return just what GPT needs by default (small payload)
         return jsonify({
             "timestamp": ts,
             "snapshot": snapshot,
@@ -167,9 +150,8 @@ def run_model():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ---------- Calibration & memory summary ----------
+# ---------- Calibration & memory ----------
 def summarize_for_memory(calib_df, week_tag="latest"):
-    """Store tiny rolling memory (last 10 entries)."""
     summary = {
         "week": week_tag,
         "games_evaluated": int(len(calib_df)),
@@ -186,7 +168,6 @@ def summarize_for_memory(calib_df, week_tag="latest"):
 
 @app.route("/run_calibration", methods=["GET"])
 def run_calibration_ep():
-    # Uses last sim output (CSV) written by monte_carlo_model.py
     try:
         df = pd.read_csv("sim_output_full.csv")
     except Exception:
@@ -195,13 +176,9 @@ def run_calibration_ep():
         calib = calibrate_model(df)
         if calib is None or calib.empty:
             return jsonify({"message": "No overlapping games for calibration"}), 200
-
         summarize_for_memory(calib, week_tag="latest")
         acc = round(calib['correct'].mean() * 100, 2)
-        return jsonify({
-            "accuracy": acc,
-            "games_evaluated": int(len(calib))
-        })
+        return jsonify({"accuracy": acc, "games_evaluated": int(len(calib))})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -215,6 +192,15 @@ def memory_summary():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ---------- Admin: usage state ----------
+@app.route("/usage_state", methods=["GET"])
+def usage_state():
+    try:
+        st = load_state()
+        rotate_if_new_day(st)
+        return jsonify(st)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     # Dev server only
