@@ -138,6 +138,7 @@ def run_model():
     n_sims = min(n_sims_req, MAX_SIMS)
 
     try:
+        # Safely handle tuple or single return
         res = run_monte_carlo(snapshot_type=snapshot, n_sims=n_sims, sim_confidence=sim_conf)
         if isinstance(res, tuple):
             df, plays_df = res
@@ -145,8 +146,16 @@ def run_model():
             df = res
             plays_df = df.copy()
 
+        # Pick the correct EV column automatically
+        ev_col_candidates = ["EV_%", "home_EV_%", "away_EV_%"]
+        sort_col = next((c for c in ev_col_candidates if c in plays_df.columns), None)
+        if not sort_col:
+            return jsonify({"error": "No EV column found in model output"}), 500
+
         ts = datetime.utcnow().isoformat()
-        top_rows = (plays_df.sort_values(by="EV_%", ascending=False)
+
+        # Select top-k opportunities
+        top_rows = (plays_df.sort_values(by=sort_col, ascending=False)
                              .head(top_k)
                              .to_dict(orient="records"))
 
@@ -155,7 +164,8 @@ def run_model():
             "snapshot": snapshot,
             "n_sims": n_sims,
             "top_k": top_k,
-            "top_opportunities": top_rows
+            "top_opportunities": top_rows,
+            "ev_field_used": sort_col
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
