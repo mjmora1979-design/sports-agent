@@ -12,7 +12,7 @@ Now includes a calibration tracker for comparing model accuracy vs. results.
 import numpy as np
 import pandas as pd
 from datetime import datetime
-import os
+import os, json
 from model_payload import build_model_payload
 from sports_agent import build_payload
 
@@ -21,10 +21,7 @@ from sports_agent import build_payload
 # Core Monte Carlo simulation
 # ------------------------------------------------------------
 def simulate_matchup(home_prob: float, away_prob: float, n_sims: int = 20000):
-    """
-    Simulate N games using the adjusted win probabilities.
-    Returns simulated win %, variance, and confidence interval.
-    """
+    """Simulate N games using the adjusted win probabilities."""
     if np.isnan(home_prob) or np.isnan(away_prob):
         return np.nan, np.nan, np.nan
 
@@ -35,15 +32,11 @@ def simulate_matchup(home_prob: float, away_prob: float, n_sims: int = 20000):
     home_win_pct = home_wins / n_sims
     away_win_pct = away_wins / n_sims
     std_error = np.sqrt(home_prob * (1 - home_prob) / n_sims)
-
     return home_win_pct, away_win_pct, std_error
 
 
 def kelly_fraction(edge: float, odds: float, fraction_cap: float = 0.25):
-    """
-    Compute a 'Kelly-lite' staking fraction based on EV edge.
-    Caps stake to avoid over-exposure.
-    """
+    """Compute 'Kelly-lite' staking fraction based on EV edge."""
     try:
         b = abs(odds) / 100 if odds < 0 else odds / 100
         q = 1 - (1 / (b + 1))
@@ -58,12 +51,12 @@ def kelly_fraction(edge: float, odds: float, fraction_cap: float = 0.25):
 # ------------------------------------------------------------
 def run_monte_carlo(snapshot_type="opening", n_sims=20000, sim_confidence=0.8):
     """
-    Builds model payload, runs Monte Carlo simulations, and returns DataFrame
-    with simulated win %, EV %, and Kelly stake recommendation.
+    Builds model payload, runs Monte Carlo simulations,
+    and returns both matchup-level (df) and team-level (plays_df) datasets.
     """
     print(f"[INFO] Running Monte Carlo: {snapshot_type} ({n_sims:,} sims per matchup)")
 
-    # Get odds + model probabilities
+    # Build data payload
     raw_json = build_payload("nfl", snapshot_type)
     model_df = build_model_payload(raw_json, snapshot_type=snapshot_type, sim_confidence=sim_confidence)
 
@@ -74,11 +67,9 @@ def run_monte_carlo(snapshot_type="opening", n_sims=20000, sim_confidence=0.8):
 
         home_win_pct, away_win_pct, std_err = simulate_matchup(home_prob, away_prob, n_sims)
 
-        # Expected Value % based on difference between simulated win% and market probability
         home_ev = (home_win_pct - row["home_ml_prob"]) * 100
         away_ev = (away_win_pct - row["away_ml_prob"]) * 100
 
-        # Kelly-lite staking
         home_kelly = kelly_fraction(home_ev, row["home_ml"] if pd.notna(row["home_ml"]) else -110)
         away_kelly = kelly_fraction(away_ev, row["away_ml"] if pd.notna(row["away_ml"]) else -110)
 
@@ -103,49 +94,78 @@ def run_monte_carlo(snapshot_type="opening", n_sims=20000, sim_confidence=0.8):
 
     df = pd.DataFrame(results)
 
-    # ✅ Deduplicate by matchup for display
-    df_unique = (
-        df.sort_values(by="home_EV_%", ascending=False)
-          .drop_duplicates(subset=["home_team", "away_team"], keep="first")
-    )
+    # Build a team-level view for both sides
+    all_plays = []
+    for _, r in df.iterrows():
+        all_plays.append({
+            "bookmaker": r["bookmaker"],
+            "team_side": "Home",
+            "team": r["home_team"],
+            "opponent": r["away_team"],
+            "odds": r["home_ml"],
+            "EV_%": r["home_EV_%"],
+            "Kelly_frac": r["home_Kelly_frac"]
+        })
+        all_plays.append({
+            "bookmaker": r["bookmaker"],
+            "team_side": "Away",
+            "team": r["away_team"],
+            "opponent": r["home_team"],
+            "odds": r["away_ml"],
+            "EV_%": r["away_EV_%"],
+            "Kelly_frac": r["away_Kelly_frac"]
+        })
 
-    df_sorted = df_unique.head(5)
+    plays_df = pd.DataFrame(all_plays)
 
-    print("\n🏈 Top 5 Unique Home-side opportunities (by EV %)")
-    print(df_sorted[["bookmaker", "home_team", "away_team", "home_ml", "home_EV_%", "home_Kelly_frac"]].to_string(index=False))
+    # Show top 5 overall value plays
+    top5 = plays_df.sort_values(by="EV_%", ascending=False).head(5)
+    print("\n🏈 Top 5 Overall Value Opportunities (by EV %)")
+    print(top5[["bookmaker", "team_side", "team", "opponent", "odds", "EV_%", "Kelly_frac"]])
 
-    return df
+    # Save outputs
+    df.to_csv("sim_output_full.csv", index=False)
+    plays_df.to_csv("value_opportunities.csv", index=False)
+    print("💾 Saved outputs → sim_output_full.csv and value_opportunities.csv")
+
+    return df, plays_df
 
 
 # ------------------------------------------------------------
 # Calibration tracker
 # ------------------------------------------------------------
 def calibrate_model(sim_df: pd.DataFrame, results_path="final_scores.csv"):
-    """
-    Compares simulated win% vs actual results (from final_scores.csv)
-    and outputs calibration stats.
-    The CSV should have columns: home_team, away_team, winner
-    """
+    """Compares simulated win% vs actual results (from final_scores.csv)."""
     if not os.path.exists(results_path):
         print(f"[WARN] No results file found at {results_path}. Skipping calibration.")
         return None
 
     actuals = pd.read_csv(results_path)
+
+    def normalize_team(name):
+        return str(name).lower().replace(" ", "").replace(".", "")
+
+    actuals["home_team"] = actuals["home_team"].apply(normalize_team)
+    actuals["away_team"] = actuals["away_team"].apply(normalize_team)
+    sim_df["home_team"] = sim_df["home_team"].apply(normalize_team)
+    sim_df["away_team"] = sim_df["away_team"].apply(normalize_team)
+
     merged = pd.merge(sim_df, actuals, on=["home_team", "away_team"], how="inner")
 
-    # Assign predicted winner based on higher simulated win%
+    if merged.empty:
+        print("[WARN] No overlapping matchups found after normalization.")
+        return None
+
     merged["predicted_winner"] = np.where(
         merged["home_win_sim"] > merged["away_win_sim"],
         merged["home_team"],
         merged["away_team"]
     )
-
     merged["correct"] = merged["predicted_winner"] == merged["winner"]
 
     accuracy = merged["correct"].mean() * 100
     print(f"\n📈 Model Calibration Accuracy: {accuracy:.2f}% on {len(merged)} games")
 
-    # Optional: Save a log file for tracking calibration over time
     merged["evaluated_at"] = datetime.utcnow().isoformat()
     merged.to_csv("calibration_log.csv", index=False)
     print("✅ Calibration log saved → calibration_log.csv")
@@ -154,12 +174,22 @@ def calibrate_model(sim_df: pd.DataFrame, results_path="final_scores.csv"):
 
 
 # ------------------------------------------------------------
-# Local test
+# Local test / integration output
 # ------------------------------------------------------------
 if __name__ == "__main__":
-    df = run_monte_carlo(snapshot_type="opening", n_sims=20000, sim_confidence=0.8)
+    df, plays_df = run_monte_carlo(snapshot_type="opening", n_sims=20000, sim_confidence=0.8)
     print("\n✅ Monte Carlo run complete — sample output:")
     print(df.head())
 
-    # Run calibration check if score file exists
     calibrate_model(df)
+
+    output_json = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "snapshot_type": "opening",
+        "top_opportunities": plays_df.sort_values(by="EV_%", ascending=False).head(10).to_dict(orient="records")
+    }
+
+    with open("monte_carlo_output.json", "w") as f:
+        json.dump(output_json, f, indent=2)
+
+    print("📤 JSON export saved → monte_carlo_output.json")
