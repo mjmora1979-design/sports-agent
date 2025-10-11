@@ -102,10 +102,14 @@ def run_monte_carlo(snapshot_type="opening", n_sims=20000, sim_confidence=0.8):
     df = pd.DataFrame(results)
 
     # Highlight top 5 value opportunities
-    df_sorted = df.sort_values(by="home_EV_%", ascending=False).head(5)
+  # Deduplicate by matchup before sorting
+df_unique = df.sort_values(by="home_EV_%", ascending=False) \
+              .drop_duplicates(subset=["home_team", "away_team"], keep="first")
 
-    print("\n🏈 Top 5 Home-side opportunities (by EV %)")
-    print(df_sorted[["home_team", "away_team", "home_ml", "home_EV_%", "home_Kelly_frac"]])
+df_sorted = df_unique.head(5)
+
+print("\n🏈 Top 5 Unique Home-side opportunities (by EV %)")
+print(df_sorted[["bookmaker", "home_team", "away_team", "home_ml", "home_EV_%", "home_Kelly_frac"]])
 
     return df
 
