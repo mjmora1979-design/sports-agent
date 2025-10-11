@@ -1,4 +1,4 @@
-# app.py  — secure, rate-limited API for GPT Actions
+# app.py — secure, rate-limited API for GPT Actions
 from flask import Flask, request, jsonify
 import os, json, time, threading
 from datetime import datetime, date
@@ -10,14 +10,14 @@ app = Flask(__name__)
 
 # ---------- Config (env with sensible defaults) ----------
 API_KEY                = os.getenv("SPORTS_AGENT_KEY", "local-test-key")
-MAX_SIMS               = int(os.getenv("MAX_SIMS", "20000"))           # per run (each matchup uses this count)
-RUNS_DAILY_QUOTA       = int(os.getenv("RUNS_DAILY_QUOTA", "40"))      # /run_model calls per day
-RUNS_PER_MINUTE        = int(os.getenv("RUNS_PER_MINUTE", "1"))        # throttle
-ODDS_DAILY_QUOTA       = int(os.getenv("ODDS_DAILY_QUOTA", "12"))      # /refresh_odds per day
-MODEL_CACHE_TTL_HOURS  = int(os.getenv("MODEL_CACHE_TTL_HOURS", "2"))  # for your internal cache usage
+MAX_SIMS               = int(os.getenv("MAX_SIMS", "20000"))
+RUNS_DAILY_QUOTA       = int(os.getenv("RUNS_DAILY_QUOTA", "40"))
+RUNS_PER_MINUTE        = int(os.getenv("RUNS_PER_MINUTE", "1"))
+ODDS_DAILY_QUOTA       = int(os.getenv("ODDS_DAILY_QUOTA", "12"))
+MODEL_CACHE_TTL_HOURS  = int(os.getenv("MODEL_CACHE_TTL_HOURS", "2"))
 
 USAGE_STATE_PATH = "usage_state.json"
-CACHE_ODDS_PATH  = "cached_odds.json"   # your existing cache file
+CACHE_ODDS_PATH  = "cached_odds.json"
 
 state_lock = threading.Lock()
 
@@ -86,7 +86,7 @@ def root():
 def health():
     return jsonify({"ok": True, "time": datetime.utcnow().isoformat()})
 
-# ---------- Force-refresh odds (counts quota) ----------
+# ---------- Force-refresh odds ----------
 @app.route("/refresh_odds", methods=["POST"])
 def refresh_odds():
     with state_lock:
@@ -103,8 +103,12 @@ def refresh_odds():
         return jsonify({"error": f"Failed to clear cache: {e}"}), 500
 
     try:
-        # Light warm run to trigger odds pull & cache write
-        df, plays_df = run_monte_carlo(snapshot_type="opening", n_sims=2000, sim_confidence=0.8)
+        res = run_monte_carlo(snapshot_type="opening", n_sims=2000, sim_confidence=0.8)
+        if isinstance(res, tuple):
+            df, _ = res
+        else:
+            df = res
+
         return jsonify({
             "status": "refreshed",
             "games_detected": int(len(df.index.unique())),
@@ -113,7 +117,7 @@ def refresh_odds():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ---------- Run model (rate-limited) ----------
+# ---------- Run model ----------
 @app.route("/run_model", methods=["POST"])
 def run_model():
     with state_lock:
@@ -131,15 +135,21 @@ def run_model():
     n_sims_req = int(data.get("n_sims", 20000))
     sim_conf  = float(data.get("sim_confidence", 0.8))
     top_k     = max(1, min(int(data.get("top_k", 10)), 50))
-
-    n_sims = min(n_sims_req, MAX_SIMS)  # hard cap per run
+    n_sims = min(n_sims_req, MAX_SIMS)
 
     try:
-        df, plays_df = run_monte_carlo(snapshot_type=snapshot, n_sims=n_sims, sim_confidence=sim_conf)
+        res = run_monte_carlo(snapshot_type=snapshot, n_sims=n_sims, sim_confidence=sim_conf)
+        if isinstance(res, tuple):
+            df, plays_df = res
+        else:
+            df = res
+            plays_df = df.copy()
+
         ts = datetime.utcnow().isoformat()
         top_rows = (plays_df.sort_values(by="EV_%", ascending=False)
                              .head(top_k)
                              .to_dict(orient="records"))
+
         return jsonify({
             "timestamp": ts,
             "snapshot": snapshot,
@@ -192,7 +202,6 @@ def memory_summary():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ---------- Admin: usage state ----------
 @app.route("/usage_state", methods=["GET"])
 def usage_state():
     try:
@@ -203,5 +212,4 @@ def usage_state():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    # Dev server only
     app.run(host="0.0.0.0", port=5000, debug=True)
